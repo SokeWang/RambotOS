@@ -1,0 +1,36 @@
+@layer utilities {
+    .glass-panel {
+        @apply bg-[#0f172a]/80 backdrop-blur-md border border-cyan-500/30 rounded-2xl;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.1), inset 0 0 20px rgba(0, 255, 255, 0.05);
+    }
+
+    .holo-text {
+        text-shadow: 0 0 5px rgba(0, 255, 255, 0.8), 0 0 10px rgba(0, 255, 255, 0.5);
+    }
+
+    .voice-active-ring {
+        @apply absolute w-full h-full rounded-full border-2 border-green-400 opacity-0;
+        animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+}
+
+/* Additional global styles not covered by tailwind utilities */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #e0faff;
+    overflow: hidden;
+    /* Prevent scrollbars */
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 255, 0.2);
+    border-radius: 2px;
+}
