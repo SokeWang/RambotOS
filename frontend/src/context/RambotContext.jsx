@@ -209,7 +209,7 @@ export const RambotProvider = ({ children }) => {
         if (backendProps.backend) {
             const onWakeWord = () => {
                 console.log("Wake Word Detected! Starting recording... (Global)");
-                addLog('system', '唤醒词触发: Jarvis');
+                addLog('system', '唤醒词触发: Rambot');
                 setIsVoiceInteraction(true);
                 startRecording();
             };

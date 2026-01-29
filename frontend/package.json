@@ -1,5 +1,5 @@
 {
-    "name": "jarvis-frontend",
+    "name": "rambot-frontend",
     "private": true,
     "version": "0.0.0",
     "type": "module",
@@ -18,6 +18,10 @@
         "lucide-react": "^0.263.1",
         "react": "^18.2.0",
         "react-dom": "^18.2.0"
+    },
+    "overrides": {
+        "react": "$react",
+        "react-dom": "$react-dom"
     },
     "devDependencies": {
         "@types/react": "^18.2.15",

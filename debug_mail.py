@@ -3,7 +3,7 @@ import sys
 import os
 
 # Add the project root to sys.path to import CFG
-sys.path.append('/Users/wangpeidong/Desktop/JARVIS')
+sys.path.append('/Users/wangpeidong/Desktop/RAMBOT')
 
 from config.config import CFG
 

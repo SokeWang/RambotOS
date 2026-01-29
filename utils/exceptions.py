@@ -12,7 +12,7 @@ import traceback
 
 # ============ 自定义异常类 ============
 
-class JarvisException(Exception):
+class RambotException(Exception):
     """RAMBOT 基础异常类"""
     def __init__(self, message: str, details: dict = None):
         self.message = message
@@ -20,37 +20,37 @@ class JarvisException(Exception):
         super().__init__(self.message)
 
 
-class MediaProcessingError(JarvisException):
+class MediaProcessingError(RambotException):
     """媒体处理错误"""
     pass
 
 
-class ASRError(JarvisException):
+class ASRError(RambotException):
     """语音识别错误"""
     pass
 
 
-class TTSError(JarvisException):
+class TTSError(RambotException):
     """语音合成错误"""
     pass
 
 
-class AgentError(JarvisException):
+class AgentError(RambotException):
     """Agent 处理错误"""
     pass
 
 
-class ToolRetrievalError(JarvisException):
+class ToolRetrievalError(RambotException):
     """工具检索错误"""
     pass
 
 
-class DatabaseError(JarvisException):
+class DatabaseError(RambotException):
     """数据库操作错误"""
     pass
 
 
-class ConfigurationError(JarvisException):
+class ConfigurationError(RambotException):
     """配置错误"""
     pass
 
@@ -85,7 +85,7 @@ def handle_errors(
         def wrapper(*args, **kwargs) -> T:
             try:
                 return func(*args, **kwargs)
-            except JarvisException as e:
+            except RambotException as e:
                 # 自定义异常,记录详细信息
                 msg = error_message or f"Error in {func.__name__}"
                 log_msg = f"{msg}: {e.message}"
@@ -135,7 +135,7 @@ def handle_async_errors(
         async def wrapper(*args, **kwargs):
             try:
                 return await func(*args, **kwargs)
-            except JarvisException as e:
+            except RambotException as e:
                 msg = error_message or f"Error in {func.__name__}"
                 log_msg = f"{msg}: {e.message}"
                 if e.details:
@@ -191,7 +191,7 @@ class ErrorHandler:
         """
         try:
             return func(*args, **kwargs)
-        except JarvisException as e:
+        except RambotException as e:
             msg = error_message or f"Error executing {func.__name__}"
             logger.error(f"{msg}: {e.message}")
             if e.details:
@@ -240,7 +240,7 @@ class ErrorHandler:
         
         getattr(logger, log_level)(log_msg)
         
-        if issubclass(exception_class, JarvisException):
+        if issubclass(exception_class, RambotException):
             raise exception_class(message, details)
         else:
             raise exception_class(message)
