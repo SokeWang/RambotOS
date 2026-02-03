@@ -16,9 +16,8 @@ export const useRambot = () => {
 
 export const RambotProvider = ({ children }) => {
     const {
-        setProcessingStep, setSubtitle, setIsSubtitleFading,
+        setProcessingStep, setSubtitle, setIsSubtitleFading, setNotification,
         setShowChatbox, setShowLogs,
-        setGenUI,
         windowMode, setWindowMode,
         isSystemReady, setIsSystemReady,
         showCameraBackground,
@@ -26,7 +25,7 @@ export const RambotProvider = ({ children }) => {
     } = useUI();
 
     // --- Logic State ---
-    const [logs, setLogs] = useState([{ type: 'system', content: '系统初始化完成' }]);
+    const [logs, setLogs] = useState([{ type: 'system', content: 'System initialization complete' }]);
     const [chatHistory, setChatHistory] = useState(() => {
         try {
             const saved = localStorage.getItem('rambot_chat_history');
@@ -65,21 +64,11 @@ export const RambotProvider = ({ children }) => {
     const setIsListeningRef = useRef(null);
     const startRecordingRef = useRef(null);
 
-    const handleUIResponse = useCallback((uiData) => {
-        const { react_code } = uiData;
-        if (react_code) {
-            setGenUI({ reactCode: react_code });
-            setShowChatbox(false);
-            addLog('system', 'Custom GenUI Transpiled');
-        } else {
-            setGenUI({ reactCode: null });
-        }
-    }, [setGenUI, setShowChatbox, addLog]);
 
     const onTTSFinished = useCallback(() => {
         if (isVoiceInteraction) {
             console.log("TTS Finished, starting continuous listening...");
-            addLog('system', 'TTS结束，开启连续对话 (5s)');
+            addLog('system', 'TTS finished, starting continuous conversation (5s)');
             if (startRecordingRef.current) startRecordingRef.current({ continuous: true });
         }
     }, [addLog, isVoiceInteraction]);
@@ -90,10 +79,10 @@ export const RambotProvider = ({ children }) => {
         setSubtitle,
         setIsSubtitleFading,
         subtitleTimeoutRef,
-        (is) => setIsListeningRef.current?.(is), // Break circle with Ref
-        handleUIResponse,
+        null, // No UI Response handler anymore
         onTTSFinished,
-        setAttachment
+        setAttachment,
+        setNotification
     );
 
     const handleVoiceProcess = useCallback((base64Audio, capturedImage) => {
@@ -123,16 +112,13 @@ export const RambotProvider = ({ children }) => {
         if (action === 'Chatbox') {
             setShowChatbox(prev => {
                 const newState = !prev;
-                addLog('system', newState ? '启动通讯模块' : '关闭通讯模块');
-                // backendProps.speak(newState ? '加密通讯信道已建立' : '通讯结束');
+                addLog('system', newState ? 'Starting communication module' : 'Closing communication module');
+                // backendProps.speak(newState ? 'Encrypted communication channel established' : 'Communication ended');
                 return newState;
             });
-        } else if (action === 'ClearUI') {
-            setGenUI({ component: 'none', props: {} });
-            addLog('system', 'UI已清理');
         } else {
-            // backendProps.speak(`${action} 指令已激活`);
-            addLog('system', `手动操作: ${action}`);
+            // backendProps.speak(`${action} command activated`);
+            addLog('system', `Manual action: ${action}`);
         }
     }, [setShowChatbox, setShowLogs, addLog, backendProps]);
 
@@ -178,7 +164,7 @@ export const RambotProvider = ({ children }) => {
             });
         }
 
-        // 立即更新 UI,不等待后端响应
+        // Update UI immediately, do not wait for backend response
         setChatHistory(prev => [...prev, {
             type: 'user',
             content: userContent,
@@ -186,21 +172,21 @@ export const RambotProvider = ({ children }) => {
             attachment: uiAttachmentLabel // Keep this for backward compatibility or simple label
         }]);
 
-        // 立即清除附件
+        // Clear attachment immediately
         if (currentAttachment) {
             setAttachment(null);
         }
 
-        setProcessingStep('分析意图...');
+        setProcessingStep('Analyzing intent...');
 
-        // 异步发送消息,不阻塞 UI
+        // Send message asynchronously, do not block UI
         setTimeout(() => {
             backendProps.sendMessage(text, currentAttachment, capturedImage);
         }, 0);
 
         // Analysis intent could still happen but we remove chart-specific trigger
 
-        setProcessingStep('执行中');
+        setProcessingStep('Executing');
         setTimeout(() => setProcessingStep(null), 1500);
     }, [cameraActive, captureFrame, attachment, addLog, backendProps, setProcessingStep, setChatHistory]);
 
@@ -209,14 +195,14 @@ export const RambotProvider = ({ children }) => {
         if (backendProps.backend) {
             const onWakeWord = () => {
                 console.log("Wake Word Detected! Starting recording... (Global)");
-                addLog('system', '唤醒词触发: Rambot');
+                addLog('system', 'Wake word triggered: Rambot');
                 setIsVoiceInteraction(true);
                 startRecording();
             };
 
             const onControlSignal = (action, target) => {
                 console.log(`Received Control Signal: ${action} ${target}`);
-                addLog('system', `AI 控制: ${action} ${target}`);
+                addLog('system', `AI Control: ${action} ${target}`);
 
                 // Route to triggerSystemAction if it matches existing logic, or handle directly
                 // Mapping targets to triggerSystemAction keys
@@ -244,7 +230,7 @@ export const RambotProvider = ({ children }) => {
 
             const onSystemInitialized = () => {
                 console.log("System Initialized!");
-                addLog('system', '核心系统初始化完成');
+                addLog('system', 'Core system initialization complete');
                 setIsSystemReady(true);
                 if (backendProps.backend.say_welcome) {
                     backendProps.backend.say_welcome();

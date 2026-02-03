@@ -14,15 +14,16 @@ export const UIProvider = ({ children }) => {
     // --- UI State ---
     const [showChatbox, setShowChatbox] = useState(false);
     const [showCameraSelector, setShowCameraSelector] = useState(false);
-    const [genUI, setGenUI] = useState({ reactCode: null });
     const [windowMode, setWindowMode] = useState('full'); // 'full' or 'mini'
     const [isSystemReady, setIsSystemReady] = useState(false);
+    const [activeApp, setActiveApp] = useState(null);
 
     // Process/Loading State
     const [processingStep, setProcessingStep] = useState(null);
 
     // Subtitle State (Visual)
     const [subtitle, setSubtitle] = useState(null);
+    const [notification, setNotification] = useState(null);
     const [isSubtitleFading, setIsSubtitleFading] = useState(false);
 
     // Cursor Control State
@@ -45,25 +46,24 @@ export const UIProvider = ({ children }) => {
         }
     }, [wallpaper]);
 
-    // Actions
-
     const value = useMemo(() => ({
         showChatbox, setShowChatbox,
         showCameraSelector, setShowCameraSelector,
         processingStep, setProcessingStep,
         subtitle, setSubtitle,
         isSubtitleFading, setIsSubtitleFading,
+        notification, setNotification,
         cursorMode, setCursorMode,
-        genUI, setGenUI,
         windowMode, setWindowMode,
         isSystemReady, setIsSystemReady,
         showCameraBackground, setShowCameraBackground,
-        wallpaper, setWallpaper
+        wallpaper, setWallpaper,
+        activeApp, setActiveApp
     }), [
         showChatbox, showCameraSelector,
         processingStep, subtitle, isSubtitleFading,
-        cursorMode, genUI, windowMode, isSystemReady,
-        showCameraBackground, wallpaper
+        cursorMode, windowMode, isSystemReady,
+        showCameraBackground, wallpaper, activeApp
     ]);
 
     return (

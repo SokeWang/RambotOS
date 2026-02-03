@@ -17,9 +17,9 @@ export default function SettingsPanel() {
     const fileInputRef = useRef(null);
 
     const filterModes = [
-        { id: 'raw', label: 'Raw Sensor', desc: '无平滑滤波，最快响应', icon: Cpu },
-        { id: 'ema', label: 'EMA Filter', desc: '指数移动平均，均衡顺滑', icon: Layers },
-        { id: 'kalman', label: 'Kalman Filter', desc: '卡尔曼动态预测，极致稳定', icon: Activity }
+        { id: 'raw', label: 'Raw Sensor', desc: 'Raw sensor data, zero filtering, fastest response', icon: Cpu },
+        { id: 'ema', label: 'EMA Filter', desc: 'Exponential Moving Average, balanced and smooth', icon: Layers },
+        { id: 'kalman', label: 'Kalman Filter', desc: 'Kalman dynamic prediction, maximum stability', icon: Activity }
     ];
 
     const handleWallpaperUpload = (e) => {
@@ -37,7 +37,7 @@ export default function SettingsPanel() {
         <div className="flex-1 flex flex-col h-full overflow-y-auto p-8 gap-10 animate-in fade-in duration-500 custom-scrollbar">
             {/* 1. Camera Immersion Toggle */}
             <section>
-                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">视觉沉浸</h3>
+                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">Visual Immersion</h3>
                 <button
                     onClick={() => setShowCameraBackground(!showCameraBackground)}
                     className={`w-full p-6 rounded-[2.5rem] border transition-all flex items-center justify-between group ${showCameraBackground ? 'bg-cyan-500/10 border-cyan-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
@@ -48,8 +48,8 @@ export default function SettingsPanel() {
                             <Video size={24} />
                         </div>
                         <div className="text-left">
-                            <p className="font-bold text-white text-lg">背景图像穿透</p>
-                            <p className="text-xs text-white/40">开启以在背景中显示实时摄像头画面</p>
+                            <p className="font-bold text-white text-lg">Background Passthrough</p>
+                            <p className="text-xs text-white/40">Enables live camera feed as the system background</p>
                         </div>
                     </div>
                     <div className={`w-14 h-8 rounded-full p-1 transition-colors ${showCameraBackground ? 'bg-cyan-500' : 'bg-white/10'}`}>
@@ -60,7 +60,7 @@ export default function SettingsPanel() {
 
             {/* 2. Personalization (Wallpaper) */}
             <section>
-                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">个性化定制</h3>
+                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">Personalization</h3>
                 <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-6 flex flex-col gap-6 font-sans">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-5">
@@ -68,8 +68,8 @@ export default function SettingsPanel() {
                                 <ImageIcon size={24} />
                             </div>
                             <div className="text-left">
-                                <p className="font-bold text-white text-lg">系统壁纸</p>
-                                <p className="text-xs text-white/40">上传自定义图片作为背景图像</p>
+                                <p className="font-bold text-white text-lg">System Wallpaper</p>
+                                <p className="text-xs text-white/40">Upload a custom image for the desktop background</p>
                             </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -84,13 +84,13 @@ export default function SettingsPanel() {
                                 onClick={() => fileInputRef.current?.click()}
                                 className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-full text-xs font-bold transition-all flex items-center gap-2 border border-white/10"
                             >
-                                <Upload size={14} /> 上传图片
+                                <Upload size={14} /> Upload Image
                             </button>
                             {wallpaper && (
                                 <button
                                     onClick={() => setWallpaper(null)}
                                     className="p-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-full transition-all border border-red-500/20"
-                                    title="重置背景"
+                                    title="Reset Background"
                                 >
                                     <RotateCcw size={14} />
                                 </button>
@@ -101,7 +101,7 @@ export default function SettingsPanel() {
                         <div className="relative w-full h-32 rounded-2xl overflow-hidden border border-white/10">
                             <img src={wallpaper} alt="Preview" className="w-full h-full object-cover" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
-                                <p className="text-[10px] font-bold text-white/60 tracking-widest uppercase">当前壁纸预览</p>
+                                <p className="text-[10px] font-bold text-white/60 tracking-widest uppercase">Current Wallpaper Preview</p>
                             </div>
                         </div>
                     )}
@@ -110,7 +110,7 @@ export default function SettingsPanel() {
 
             {/* 3. Cursor Smoothing Filters */}
             <section>
-                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">光标滤波算法</h3>
+                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">Cursor Filtering Algorithm</h3>
                 <div className="grid grid-cols-3 gap-4">
                     {filterModes.map((mode) => {
                         const Icon = mode.icon;
@@ -136,7 +136,7 @@ export default function SettingsPanel() {
 
             {/* 4. Camera Device Selection */}
             <section className="flex flex-col min-h-0">
-                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">视野来源 (CAM)</h3>
+                <h3 className="text-xs font-bold text-white/40 uppercase tracking-[0.2em] mb-4 ml-4">Visual Feed Source (CAM)</h3>
                 <div className="bg-black/30 rounded-[3rem] border border-white/10 overflow-hidden flex flex-col max-h-[300px]">
                     <div className="overflow-y-auto p-4 space-y-2 custom-scrollbar">
                         {availableCameras.length > 0 ? (
@@ -149,7 +149,7 @@ export default function SettingsPanel() {
                                 >
                                     <div className="flex items-center gap-4">
                                         <Camera size={18} className={selectedCameraId === camera.deviceId ? 'text-cyan-400' : 'text-white/30'} />
-                                        <span className="text-sm font-medium text-white/80">{camera.label || `摄像头 ${idx + 1}`}</span>
+                                        <span className="text-sm font-medium text-white/80">{camera.label || `Camera ${idx + 1}`}</span>
                                     </div>
                                     {selectedCameraId === camera.deviceId && <Check size={18} className="text-green-400" />}
                                 </button>
@@ -157,7 +157,7 @@ export default function SettingsPanel() {
                         ) : (
                             <div className="h-40 flex flex-col items-center justify-center text-white/20 gap-3">
                                 <Camera size={48} />
-                                <p className="text-sm font-medium">未检测到可用摄像头</p>
+                                <p className="text-sm font-medium">No available cameras detected</p>
                             </div>
                         )}
                     </div>

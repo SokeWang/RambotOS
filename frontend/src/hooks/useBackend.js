@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFading, subtitleTimeoutRef,
     setIsListening,
-    handleUIResponse,
     onAudioEnded,
-    setAttachment
+    setAttachment,
+    setNotification
 ) => {
     const [backend, setBackend] = useState(null);
 
@@ -36,15 +36,15 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 backendBridge.chatResponse.connect(function (rawResponse) {
                     try {
                         let responseText = rawResponse;
-                        let uiData = null;
                         let webcamNeeded = false;
+                        let toolCalls = [];
 
                         // Try parsing as JSON
-                        if (rawResponse.startsWith("{")) {
+                        if (typeof rawResponse === 'string' && rawResponse.startsWith("{")) {
                             const payload = JSON.parse(rawResponse);
                             responseText = payload.text || "";
-                            uiData = payload.ui;
                             webcamNeeded = payload.webcam_needed || false;
+                            toolCalls = payload.tool_calls || [];
                         } else if (typeof rawResponse !== 'string') {
                             console.warn("Received non-string response:", rawResponse);
                             responseText = String(rawResponse);
@@ -53,59 +53,47 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                         let structuredContent;
                         try {
                             if (responseText.trim().startsWith("[")) {
-                                // It might be a JSON array string from agent.py
                                 structuredContent = JSON.parse(responseText);
                             }
-                        } catch (e) {
-                            // Not valid JSON array, treat as plain text
-                        }
+                        } catch (e) { }
 
                         if (!Array.isArray(structuredContent)) {
-                            // Normalize to multimodal object format for consistency
                             structuredContent = [{ type: 'text', text: responseText }];
                         }
 
                         if (responseText && responseText.startsWith("Error")) {
                             addLog('error', responseText);
                         } else {
-                            // Update the previous user message with webcam_needed flag
-                            // This tells the frontend whether to display the camera image
+                            // Update history with webcam_needed and tool_calls
                             setChatHistory(prev => {
                                 const currentHistory = Array.isArray(prev) ? prev : [];
-
-                                // Find the last user message and update its webcam_needed flag
                                 const updatedHistory = [...currentHistory];
+
+                                // Update last user message's webcamNeeded
                                 for (let i = updatedHistory.length - 1; i >= 0; i--) {
                                     if (updatedHistory[i].type === 'user') {
-                                        updatedHistory[i] = {
-                                            ...updatedHistory[i],
-                                            webcamNeeded: webcamNeeded
-                                        };
+                                        updatedHistory[i] = { ...updatedHistory[i], webcamNeeded };
                                         break;
                                     }
                                 }
 
-                                return updatedHistory;
-                            });
-
-                            // Progressive Update Logic:
-                            // If the last message is from 'ai', update it instead of adding a new one
-                            setChatHistory(prev => {
-                                const currentHistory = Array.isArray(prev) ? prev : [];
-                                const lastMsg = currentHistory[currentHistory.length - 1];
+                                const lastMsg = updatedHistory[updatedHistory.length - 1];
                                 if (lastMsg && lastMsg.type === 'ai') {
-                                    // Update existing message
-                                    const updatedHistory = [...currentHistory];
                                     updatedHistory[updatedHistory.length - 1] = {
                                         ...lastMsg,
                                         content: structuredContent,
+                                        tool_calls: toolCalls,
                                         time: new Date()
                                     };
-                                    return updatedHistory;
                                 } else {
-                                    // Add new message
-                                    return [...currentHistory, { type: 'ai', content: structuredContent, time: new Date() }];
+                                    updatedHistory.push({
+                                        type: 'ai',
+                                        content: structuredContent,
+                                        tool_calls: toolCalls,
+                                        time: new Date()
+                                    });
                                 }
+                                return updatedHistory;
                             });
 
                             // Show Subtitle if Chatbox is closed
@@ -122,11 +110,6 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                                 setTimeout(() => setSubtitle(null), 500);
                             }, 8000);
 
-                            // Handle UI Component
-                            if (uiData && uiData.component !== 'none') {
-                                console.log("UI Component Triggered:", uiData);
-                                if (handleUIResponse) handleUIResponse(uiData);
-                            }
                         }
                     } catch (e) {
                         console.error("Error parsing chat response:", e, "Raw:", rawResponse);
@@ -202,7 +185,7 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                                 time: new Date(msg.time)
                             }));
                             setChatHistory(processedHistory);
-                            addLog('system', `已加载 ${history.length} 条历史记录`);
+                            addLog('system', `Loaded ${history.length} history records`);
                         } catch (e) {
                             console.error("Failed to parse history:", e);
                         }
@@ -225,6 +208,21 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                         addLog('system', `Develop Mode: ${enabled ? 'ON' : 'OFF'}`);
                         // We need a way to update the state in RambotContext
                         if (window.onDevelopModeChange) window.onDevelopModeChange(enabled);
+                    });
+                }
+
+                // Handle System Notifications
+                if (backendBridge.notificationSignal) {
+                    backendBridge.notificationSignal.connect(function (message) {
+                        console.log("System Notification Received:", message);
+                        addLog('system', `[NOTIFY] ${message}`);
+
+                        setNotification(message);
+
+                        // Auto clear after 8 seconds
+                        setTimeout(() => {
+                            setNotification(null);
+                        }, 8000);
                     });
                 }
             });

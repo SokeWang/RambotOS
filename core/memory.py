@@ -1,4 +1,5 @@
 import chromadb
+import sys
 from chromadb.config import Settings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from config.config import CFG
@@ -10,7 +11,12 @@ import os
 class MemoryManager:
     def __init__(self, collection_name="long_term_memory"):
         # Initialize ChromaDB Persistent Client
-        db_path = "./db/chroma_data"
+        # Use user's home directory for persistence when frozen/packaged
+        if getattr(sys, 'frozen', False):
+            db_path = os.path.expanduser("~/.rambot/db/chroma_data")
+        else:
+            db_path = "./db/chroma_data"
+            
         if not os.path.exists(db_path):
             os.makedirs(db_path, exist_ok=True)
             
@@ -83,6 +89,36 @@ class MemoryManager:
             return memories
         except Exception as e:
             logger.error(f"Failed to retrieve memories from ChromaDB: {e}")
+            return []
+
+    def get_all_memories(self, limit: int = 100) -> List[Dict]:
+        """
+        Retrieve all memories from ChromaDB.
+        """
+        try:
+            results = self.collection.get(
+                include=["metadatas", "documents"],
+                limit=limit
+            )
+            
+            memories = []
+            if results and results['metadatas']:
+                for i in range(len(results['metadatas'])):
+                    metadata = results['metadatas'][i]
+                    doc = results['documents'][i]
+                    memories.append({
+                        "id": results['ids'][i],
+                        "role": metadata.get("role"),
+                        "content": metadata.get("content"),
+                        "text": doc,
+                        "timestamp": metadata.get("timestamp")
+                    })
+            
+            # Sort by timestamp (descending)
+            memories.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+            return memories
+        except Exception as e:
+            logger.error(f"Failed to get all memories from ChromaDB: {e}")
             return []
 
     def get_tool(self):

@@ -7,11 +7,11 @@ edge-tts
 pvporcupine
 pyaudio
 openai
-mcp
-langchain-mcp-adapters
 langgraph-checkpoint-mongodb
 loguru
 langchain_google_genai
 numpy
 pyautogui
 faster-whisper
+fastapi
+uvicorn

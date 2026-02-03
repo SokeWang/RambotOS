@@ -15,6 +15,6 @@ class BrainAgent:
             response_format=AIResponse
         )
 
-    async def ainvoke(self, input_dict):
+    async def ainvoke(self, input_dict, **kwargs):
         """Simple wrapper for agent invocation."""
-        return await self.agent.ainvoke(input_dict)
+        return await self.agent.ainvoke(input_dict, **kwargs)

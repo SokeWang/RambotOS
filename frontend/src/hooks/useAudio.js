@@ -57,7 +57,7 @@ export const useAudio = (addLog, processAudio, captureFrame, backend) => {
                         // Logic 1: Post-Speech Silence (Stop after speaking)
                         if (speechStarted && (Date.now() - silenceStart > SILENCE_DURATION)) {
                             console.log("VAD: Silence detected (end of speech), stopping...");
-                            addLog('system', '检测到静音，自动结束');
+                            addLog('system', 'Silence detected, stopping...');
                             if (mediaRecorderRef.current.state === 'recording') {
                                 mediaRecorderRef.current.requestData();
                                 mediaRecorderRef.current.stop();
@@ -68,7 +68,7 @@ export const useAudio = (addLog, processAudio, captureFrame, backend) => {
                         // Logic 2: Initial Silence Timeout (Continuous Mode Only)
                         if (isContinuous && !speechStarted && (Date.now() - startTime > CONTINUOUS_TIMEOUT)) {
                             console.log("VAD: Continuous Mode Timeout (No speech detected). Aborting.");
-                            addLog('system', '等待超时 (5s)');
+                            addLog('system', 'Wait timeout (5s)');
                             // Abort without saving data
                             if (mediaRecorderRef.current.state === 'recording') {
                                 // Stop but don't process? 
@@ -132,11 +132,11 @@ export const useAudio = (addLog, processAudio, captureFrame, backend) => {
                 mediaRecorderRef.current.start();
                 checkSilence();
                 setIsListening(true);
-                addLog('system', '开始录音 (说话后自动停止)...');
+                addLog('system', 'Recording started (autostop after speaking)...');
 
             } catch (err) {
                 console.error("Microphone access failed:", err);
-                addLog('error', '无法访问麦克风');
+                addLog('error', 'Microphone access failed');
                 setIsListening(false);
                 // Notify Backend to Resume Wake Word on error
                 const bridge = backend || window.backendBridge;
@@ -152,7 +152,7 @@ export const useAudio = (addLog, processAudio, captureFrame, backend) => {
     const stopRecording = useCallback(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
-            addLog('system', '录音结束, 正在识别...');
+            addLog('system', 'Recording stopped, recognizing...');
         }
     }, [addLog]);
 

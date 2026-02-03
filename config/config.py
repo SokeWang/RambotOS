@@ -7,13 +7,15 @@ class CFG:
     asr_engine = "fast-whisper"
     embedding_model = "gemini-embedding-001"
     
-    # 163 Mail Configuration
-    MAIL_163_USER = "rambotai@163.com"
-    MAIL_163_PASS = "LQJbifKjyyK8CwtW"
+    # Email Configuration (Default: 163 Mail)
+    MAIL_PROVIDER = "163"  # "163", "gmail", "outlook", "generic"
+    MAIL_USER = "rambotai@163.com"
+    MAIL_PASS = "LQJbifKjyyK8CwtW"
     IMAP_SERVER = "imap.163.com"
     SMTP_SERVER = "smtp.163.com"
     IMAP_PORT = 993
     SMTP_PORT = 465
+    MAIL_CHECK_INTERVAL = 30  # Seconds between checks
 
     # Middleware Configuration
     tool_selector_max_tools = 5

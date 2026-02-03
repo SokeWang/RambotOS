@@ -9,7 +9,10 @@ import GestureController from './GestureController';
 import VisionGaze from './VisionGaze';
 import VisionWindow from './VisionWindow';
 import SettingsPanel from './HUD/SettingsPanel';
-import { Cpu } from 'lucide-react';
+import SkillsPanel from './HUD/SkillsPanel';
+import KnowledgePanel from './HUD/KnowledgePanel';
+import HeartbeatPanel from './HUD/HeartbeatPanel';
+import { Cpu, X, Activity } from 'lucide-react';
 import { useUI } from '../context/UIContext';
 import { useRambot } from '../context/RambotContext';
 
@@ -19,6 +22,10 @@ export default function HUD() {
         showChatbox,
         setShowChatbox,
         processingStep,
+        activeApp,
+        setActiveApp,
+        notification,
+        setNotification
     } = useUI();
 
     // Rambot Logic State
@@ -40,7 +47,6 @@ export default function HUD() {
     const [isPinching, setIsPinching] = useState(false);
     const [windowPos, setWindowPos] = useState({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
-    const [activeApp, setActiveApp] = useState(null);
     const [showDock, setShowDock] = useState(false);
     const revealTimeoutRef = useRef(null);
 
@@ -88,7 +94,19 @@ export default function HUD() {
         let minDistance = currentThreshold;
 
         targets.forEach(el => {
+            // Check if element or any parent is non-interactable or hidden
+            const style = window.getComputedStyle(el);
+            if (style.pointerEvents === 'none' || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
+
+            // Also check if it's within a hidden ancestor (e.g., using opacity-0 or pointer-events-none classes)
+            if (el.closest('.pointer-events-none') && !el.closest('.pointer-events-auto')) return;
+            if (el.closest('.opacity-0') || el.closest('[style*="opacity: 0"]')) return;
+
             const rect = el.getBoundingClientRect();
+
+            // Check if element is even in the viewport or has non-zero size
+            if (rect.width === 0 || rect.height === 0) return;
+
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
             const dist = Math.sqrt(Math.pow(clientX - centerX, 2) + Math.pow(clientY - centerY, 2));
@@ -263,12 +281,41 @@ export default function HUD() {
             {/* 1. Vision Gaze Overlay */}
             <VisionGaze mousePos={gazePos} isPinching={isPinching} />
 
+            {/* 2. System Notifications (Top Right) */}
+            <div className="absolute top-10 right-10 z-[100] flex flex-col items-end space-y-4 pointer-events-none">
+                {notification && (
+                    <div className="animate-in fade-in slide-in-from-right-10 duration-500 ease-out pointer-events-auto">
+                        <div className="relative group overflow-hidden">
+                            {/* Ambient glow */}
+                            <div className="absolute inset-0 bg-blue-500/20 blur-xl opacity-50 group-hover:opacity-100 transition-opacity" />
+
+                            <div className="relative flex items-center space-x-6 px-8 py-5 bg-black/40 backdrop-blur-3xl rounded-[2.5rem] border border-white/20 shadow-2xl min-w-[320px] max-w-md">
+                                <div className="flex-shrink-0 w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center shadow-lg">
+                                    <Activity className="w-6 h-6 text-white animate-pulse" />
+                                </div>
+                                <div className="flex-1">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-[10px] font-mono text-blue-400 uppercase tracking-[0.2em] font-bold">System Pulse</span>
+                                        <button
+                                            onClick={() => setNotification(null)}
+                                            className="text-white/20 hover:text-white transition-colors"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                    <p className="text-white text-sm font-medium leading-relaxed">
+                                        {notification}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* 3. Main Interface Layers */}
             <div
                 className="relative z-20 w-full h-full transition-[opacity,transform] duration-500 overflow-hidden"
-                onClick={(e) => {
-                    if (showChatbox) setShowChatbox(false);
-                }}
             >
                 {/* Header Layer */}
                 <header className="absolute top-0 left-0 w-full z-50 pt-8 px-10 pointer-events-none">
@@ -287,7 +334,7 @@ export default function HUD() {
                     {/* Spatial Windows */}
                     {activeApp && (
                         <VisionWindow
-                            name={activeApp.id === 'Settings' ? '系统设置' : (activeApp.id === 'Chatbox' ? '神经网络通讯' : activeApp.name)}
+                            name={activeApp.id === 'Settings' ? 'System Settings' : (activeApp.id === 'Chatbox' ? 'Neural Communication' : activeApp.name)}
                             onClose={() => {
                                 setActiveApp(null);
                                 setWindowPos({ x: 0, y: 0 });
@@ -308,6 +355,12 @@ export default function HUD() {
                                     />
                                 ) : activeApp.id === 'Settings' ? (
                                     <SettingsPanel />
+                                ) : activeApp?.id?.toLowerCase() === 'skills' ? (
+                                    <SkillsPanel />
+                                ) : activeApp?.id === 'Knowledge' ? (
+                                    <KnowledgePanel />
+                                ) : activeApp?.id === 'security' ? (
+                                    <HeartbeatPanel />
                                 ) : (
                                     <div className="p-12 overflow-y-auto w-full h-full">
                                         <div className="grid grid-cols-2 gap-10">
@@ -315,7 +368,7 @@ export default function HUD() {
                                                 <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center">
                                                     <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
                                                 </div>
-                                                <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">{activeApp.name} 模块加载中</p>
+                                                <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">{activeApp.name} Module Loading...</p>
                                             </div>
                                         </div>
                                     </div>
@@ -337,7 +390,8 @@ export default function HUD() {
 
                 {/* Footer Layer */}
                 <footer
-                    className={`absolute bottom-0 left-0 w-full z-40 pb-10 px-10 pointer-events-none flex justify-center transition-all duration-500 ease-out ${showDock ? 'translate-y-0 opacity-100' : 'translate-y-24 opacity-0 scale-95'}`}
+                    className={`absolute bottom-0 left-0 w-full z-40 pb-10 px-10 pointer-events-none flex justify-center transition-all duration-500 ease-out 
+                        ${(!activeApp || showDock) ? 'translate-y-0 opacity-100' : 'translate-y-24 opacity-0 scale-95'}`}
                     onMouseEnter={handleDockHover}
                     onMouseLeave={() => handleDockLeave()}
                 >
@@ -347,6 +401,7 @@ export default function HUD() {
                                 setShowChatbox(!showChatbox);
                             } else {
                                 setActiveApp({ name: action, id: action });
+                                setShowDock(false); // Hide dock immediately when an app opens
                             }
                             triggerSystemAction(action);
                         }} />

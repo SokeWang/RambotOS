@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import QApplication, QFileDialog
 from PySide6.QtGui import QIcon
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QUrl
 import threading
@@ -16,19 +16,25 @@ from ultron import Ultron
 from loguru import logger
 from services.media_processor import MediaProcessor
 from services.wakeword import WakeWordThread
-from services.email_monitor import EmailMonitorThread
+from services.monitor_manager import monitor_manager
 from utils.exceptions import ErrorHandler, MediaProcessingError, ASRError
 from utils.concurrency import get_concurrency_manager
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite"
 from PySide6.QtCore import Qt
 
-if __name__ == "__main__":
+def run_gui():
     # Create App first
     app = QApplication(sys.argv)
     
     # Set Application Icon
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "public", "favicon.png")
+    # Handle frozen path for PyInstaller
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        
+    icon_path = os.path.join(base_path, "frontend", "public", "favicon.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     
@@ -55,7 +61,7 @@ if __name__ == "__main__":
             self.view = None # Will be set later
             self.wake_word_thread = None
             self.email_monitor_thread = None
-            # 初始化并发控制管理器
+            # Initialize concurrency control manager
             self.concurrency_manager = get_concurrency_manager(max_workers=2, max_queue_size=10)
             self.current_task_id = 0
             self.agent_busy = False
@@ -78,11 +84,11 @@ if __name__ == "__main__":
                 logger.warning(f"Attachment path does not exist: {attachment_path}")
             
             if agent_instance:
-                # 生成唯一任务 ID
+                # Generate unique task ID
                 self.current_task_id += 1
                 task_id = f"chat_{self.current_task_id}_{int(time.time())}"
                 
-                # 使用并发控制管理器提交任务
+                # Use concurrency control manager to submit task
                 future = self.concurrency_manager.submit_task(
                     task_id=task_id,
                     func=lambda: self._run_agent(message=message, attachment_path=attachment_path, camera_image=camera_image)
@@ -92,13 +98,11 @@ if __name__ == "__main__":
                     logger.warning("Task submission failed or duplicate task running")
                     self.chatResponse.emit(json.dumps({
                         "text": "I'm currently processing another request. Please wait a moment.",
-                        "ui": None,
                         "webcam_needed": False
                     }))
             else:
                 self.chatResponse.emit(json.dumps({
                     "text": "Error: Agent not initialized.",
-                    "ui": None,
                     "webcam_needed": False
                 }))
 
@@ -127,7 +131,6 @@ if __name__ == "__main__":
                 # Emit text for visual feedback
                 self.chatResponse.emit(json.dumps({
                     "text": text,
-                    "ui": None,
                     "webcam_needed": False
                 }))
                 # Generate and emit audio
@@ -158,12 +161,13 @@ if __name__ == "__main__":
                 if speech_file:
                     try:
                         message = ear.transcribe(speech_file)
+                        # Emit signal to frontend so user message is added to chat history
+                        self.speechRecognized.emit(message)
                     except ASRError as e:
                         logger.warning(f"ASR failed: {e.message}")
                         # Inform frontend to reset UI state
                         self.chatResponse.emit(json.dumps({
                             "text": f"System: {e.message}",
-                            "ui": None,
                             "webcam_needed": False
                         }))
                         return # Stop processing, return to wakeword state
@@ -204,13 +208,12 @@ if __name__ == "__main__":
                     if brain_response:
                         if isinstance(brain_response, dict):
                             reply_text = brain_response.get("reply", "")
-                            ui_content = brain_response.get("ui_component", None)
                         else:
                             reply_text = str(brain_response)
 
                         frontend_payload = {
                             "text": reply_text,
-                            "ui": ui_content,
+                            "tool_calls": brain_response.get("tool_calls", []) if isinstance(brain_response, dict) else [],
                             "webcam_needed": webcam_needed  # Tell frontend if camera image should be shown
                         }
                         self.chatResponse.emit(json.dumps(frontend_payload))
@@ -283,21 +286,43 @@ if __name__ == "__main__":
                 # The Frontend should handle rendering of [{"type": "text", ...}]
                 # Previous logic flattened it, but User request explicitly wants aligned object storage.
                 if msg["role"] == "ai":
-                    raw_text = content[0]["text"] if isinstance(content, list) and content else str(content)
+                    content_list = content if isinstance(content, list) else []
+                    text_content = ""
+                    tool_calls = []
+                    
+                    for item in content_list:
+                        if item.get("type") == "text":
+                            text = item.get("text", "")
+                            if text.startswith("__TOOL_CALLS_METADATA__: "):
+                                try:
+                                    tool_calls_json = text.replace("__TOOL_CALLS_METADATA__: ", "")
+                                    tool_calls = json.loads(tool_calls_json)
+                                except:
+                                    pass
+                            else:
+                                text_content = text
+                        elif item.get("type") == "tool_calls":
+                            # Backward compatibility for the 5 mins this existed
+                            tool_calls = item.get("calls", [])
+                    
+                    if not text_content and content_list:
+                        # Fallback for old simple format
+                        text_content = str(content)
+
                     try:
                         # Try to parse as the old JSON format
-                        parsed = json.loads(raw_text)
+                        parsed = json.loads(text_content)
                         if isinstance(parsed, dict) and "reply" in parsed:
-                            content = parsed["reply"]
+                            display_text = parsed["reply"]
                         else:
-                            content = raw_text
+                            display_text = text_content
                     except:
-                        # If not JSON, it's already the raw text we want
-                        content = raw_text
+                        display_text = text_content
 
                 formatted_history.append({
                     "type": msg["role"],
-                    "content": content,
+                    "content": display_text if msg["role"] == "ai" else content,
+                    "tool_calls": tool_calls if msg["role"] == "ai" else [],
                     "time": msg["time"]
                 })
             json_history = json.dumps(formatted_history)
@@ -316,6 +341,129 @@ if __name__ == "__main__":
             self.notificationSignal.emit(message)
             # You might also want to trigger a TTS message here
             # self.concurrency_manager.submit_task("notify_speech", lambda: asyncio.run(agent_instance.mouth.generate_base64_audio(message)))
+
+        @Slot(result=str)
+        def get_skills(self):
+            import re
+            import json
+            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
+            if not os.path.exists(skills_dir):
+                return json.dumps([])
+            
+            skills = []
+            for item in os.listdir(skills_dir):
+                path = os.path.join(skills_dir, item)
+                if os.path.isdir(path):
+                    skill_md = os.path.join(path, "SKILL.md")
+                    skill_data = {"id": item, "name": item, "description": "", "path": path}
+                    if os.path.exists(skill_md):
+                        try:
+                            with open(skill_md, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                name_match = re.search(r'^name:\s*(.*)$', content, re.MULTILINE)
+                                desc_match = re.search(r'^description:\s*(.*)$', content, re.MULTILINE)
+                                if name_match: skill_data["name"] = name_match.group(1).strip()
+                                if desc_match: skill_data["description"] = desc_match.group(1).strip()
+                        except Exception as e:
+                            logger.error(f"Error reading {skill_md}: {e}")
+                    skills.append(skill_data)
+            return json.dumps(skills)
+
+        @Slot(str, str, result=bool)
+        def create_skill(self, name, description):
+            import os
+            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
+            skill_id = name.lower().replace(" ", "-")
+            skill_path = os.path.join(skills_dir, skill_id)
+            if os.path.exists(skill_path):
+                return False
+            
+            try:
+                os.makedirs(skill_path, exist_ok=True)
+                skill_md_content = f"--- \nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n{description}\n"
+                with open(os.path.join(skill_path, "SKILL.md"), 'w', encoding='utf-8') as f:
+                    f.write(skill_md_content)
+                return True
+            except Exception as e:
+                logger.error(f"Error creating skill: {e}")
+                return False
+
+        @Slot(str, str, str, result=bool)
+        def update_skill(self, skill_id, name, description):
+            import os
+            import re
+            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
+            skill_path = os.path.join(skills_dir, skill_id)
+            skill_md = os.path.join(skill_path, "SKILL.md")
+            
+            if not os.path.exists(skill_md):
+                return False
+            
+            try:
+                with open(skill_md, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Update frontmatter
+                content = re.sub(r'^name:.*$', f'name: {name}', content, flags=re.MULTILINE)
+                content = re.sub(r'^description:.*$', f'description: {description}', content, flags=re.MULTILINE)
+                
+                with open(skill_md, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                return True
+            except Exception as e:
+                logger.error(f"Error updating skill: {e}")
+                return False
+
+        @Slot(str, result=bool)
+        def delete_skill(self, skill_id):
+            import shutil
+            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
+            skill_path = os.path.join(skills_dir, skill_id)
+            
+            if not os.path.exists(skill_path):
+                return False
+            
+            try:
+                shutil.rmtree(skill_path)
+                return True
+            except Exception as e:
+                logger.error(f"Error deleting skill: {e}")
+                return False
+
+        @Slot(result=str)
+        def get_long_term_memory(self):
+            try:
+                memories = agent_instance.brain.long_term_memory.get_all_memories()
+                return json.dumps(memories)
+            except Exception as e:
+                logger.error(f"Error fetching memories: {e}")
+                return json.dumps([])
+
+        @Slot(str, result=bool)
+        def delete_memory(self, memory_id):
+            try:
+                agent_instance.brain.long_term_memory.collection.delete(ids=[memory_id])
+                return True
+            except Exception as e:
+                logger.error(f"Error deleting memory: {e}")
+                return False
+
+        # --- Monitor/Heartbeat Control ---
+        @Slot(str, bool, result=bool)
+        def toggle_monitor(self, service_name, enable):
+            """
+            Toggles a background monitoring service.
+            service_name: 'email', 'whatsapp', etc.
+            enable: True to start, False to stop.
+            """
+            logger.info(f"BackendBridge: toggle_monitor({service_name}, {enable})")
+            return monitor_manager.toggle_monitor(service_name, enable)
+
+        @Slot(result=str)
+        def get_monitors_status(self):
+            """Returns a JSON string of all monitor statuses."""
+            import json
+            return json.dumps(monitor_manager.get_all_statuses())
 
         # --- Gesture Control ---
         @Slot(float, float)
@@ -385,19 +533,39 @@ if __name__ == "__main__":
 
     # --- Setup QWebEngineView ---
     class WebEnginePage(QWebEnginePage):
+        def __init__(self, profile, parent=None):
+            super().__init__(profile, parent)
+
         def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
             # Suppress messages to reduce verbosity as requested.
             pass
 
-    view = QWebEngineView()
-    page = WebEnginePage(view)
+    # Configure Persistent Storage for LocalStorage/Settings
+    storage_path = os.path.abspath(os.path.expanduser("~/.rambot/web_storage"))
+    os.makedirs(storage_path, exist_ok=True)
     
-    # Configure Settings for React/CDN loading
-    settings = page.settings()
-    settings.setAttribute(settings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
-    settings.setAttribute(settings.WebAttribute.LocalContentCanAccessFileUrls, True)
-    settings.setAttribute(settings.WebAttribute.JavascriptEnabled, True)
-    settings.setAttribute(settings.WebAttribute.LocalStorageEnabled, True)
+    view = QWebEngineView()
+    
+    # Create a persistent profile with a unique storage name.
+    # Passing 'view' as parent ensures it's cleaned up with the window.
+    profile = QWebEngineProfile("RambotProfile", view)
+    profile.setPersistentStoragePath(storage_path)
+    profile.setCachePath(os.path.join(storage_path, "cache"))
+    profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+    
+    logger.info(f"WebProfile: StorageName={profile.storageName()}")
+    logger.info(f"WebProfile: PersistentPath={profile.persistentStoragePath()}")
+    logger.info(f"WebProfile: OffTheRecord={profile.isOffTheRecord()}")
+    
+    # Configure Settings correctly
+    # Use QWebEngineSettings.WebAttribute for PySide6 compatibility
+    settings = profile.settings()
+    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+    
+    page = WebEnginePage(profile, view)
     
     page.setBackgroundColor(Qt.black)
     
@@ -430,11 +598,9 @@ if __name__ == "__main__":
             asyncio.run(agent_instance.initialize())
             backend_bridge.initialized.emit() # Signal frontend that loading is finished
             
-            # Start Email Monitor after brain is ready
-            logger.info("Starting Email Monitor...")
-            backend_bridge.email_monitor_thread = EmailMonitorThread(agent_instance.brain)
-            backend_bridge.email_monitor_thread.notificationReceived.connect(backend_bridge.handle_notification)
-            backend_bridge.email_monitor_thread.start()
+            # Connect the Service-Oriented MonitorManager to the HUD
+            logger.info("Connecting Service-Oriented MonitorManager...")
+            monitor_manager.notificationReceived.connect(backend_bridge.handle_notification)
             
         backend_bridge.concurrency_manager.submit_task(
             task_id="startup_init",
@@ -457,7 +623,12 @@ if __name__ == "__main__":
     wake_word_thread.start()
     
     # Load index.html
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Handle frozen path
+    if getattr(sys, 'frozen', False):
+        current_dir = sys._MEIPASS
+    else:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
     index_path = "file://" + os.path.join(current_dir, "frontend", "dist", "index.html")
     view.load(QUrl(index_path))
     
@@ -495,11 +666,15 @@ if __name__ == "__main__":
             wake_word_thread.wait()
             logger.info("WakeWordThread stopped.")
 
-        if hasattr(backend_bridge, 'email_monitor_thread') and backend_bridge.email_monitor_thread:
-            backend_bridge.email_monitor_thread.stop()
-            logger.info("EmailMonitorThread stopped.")
+        # Stop all heartbeats/monitors and bridge via MonitorManager
+        logger.info("Cleaning up Service Monitors...")
+        monitor_manager.cleanup()
 
-    app.aboutToQuit.connect(cleanup)
+    app.aboutToQuit.connect(cleanup) # app needs to be defined (QApplication instance)
 
     exit_code = app.exec()
-    sys.exit(exit_code)
+    return exit_code
+
+if __name__ == "__main__":
+    sys.exit(run_gui())
+```

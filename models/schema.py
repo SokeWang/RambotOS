@@ -3,12 +3,8 @@ from typing import Optional, Literal
 
 class AIResponse(BaseModel):
     reply: str = Field(description="The reply to the user's message.")
-    need_ui: bool = Field(default=False, description="Whether the user requires UI.")
-    ui_instruction: Optional[str] = Field(default=None, description="Detailed instructions for the Designer Agent on what to build, including relevant data points from tool results.")
-
-
-class DesignerResponse(BaseModel):
-    react_code: str = Field(default="", description="Custom React code to render. This should be the primary way to provide UI.")
+    save_to_long_term_memory: bool = Field(default=False, description="Whether this interaction (user query and your reply) should be saved to long-term memory. Only set this for meaningful information, preferences, or facts about the user.")
+    need_ui: bool = Field(default=False, description="Specifically for Email Agent: Whether a critical decision is needed from the user.")
 
 class RequireWebcam(BaseModel):
     require_webcam: bool = Field(default=False, strict=True,description="Whether the user requires webcam")

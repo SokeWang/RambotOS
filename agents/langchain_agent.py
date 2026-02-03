@@ -1,15 +1,14 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from utils.tool_retriever import ToolRetriever
 from config.config import CFG
 from core.history import History
 from loguru import logger
 from agents.brain import BrainAgent
-from agents.designer import DesignerAgent
 from tools.tool_manager import tool_manager
-from core.chat_prompt import Brain_Agent_Prompt, Designer_Agent_Prompt
+from tools.skill_index import skill_index
+from core.chat_prompt import build_system_prompt  # Updated import
 from core.memory import MemoryManager
-from core.intent import IntentManager
 import asyncio
+import re
 
 class UltronBrain:
     def __init__(self):
@@ -20,12 +19,15 @@ class UltronBrain:
 
         self.short_memory_manager = History()
         self.long_term_memory = MemoryManager()
-        self.retriever = ToolRetriever()
-        self.intent_manager = IntentManager()
         
         self.brain_manager = None
-        self.designer_manager = None
         self._init_lock = asyncio.Lock()
+        
+        # Skill management
+        self._current_skills = set()  # Skills loaded in current session
+        self._last_tool_signature = None
+        self._cached_tools = None
+        self._cached_prompt = None
 
     async def initialize(self):
         async with self._init_lock:
@@ -37,16 +39,14 @@ class UltronBrain:
             # Initialize ToolManager and perform first discovery
             await tool_manager.initialize()
             
-            # Index tools for retrieval
-            all_mcp_tools = tool_manager.mcp_tools
-            if all_mcp_tools:
-                self.retriever.index_tools(all_mcp_tools)
+            # Initialize SkillIndex
+            skill_index.initialize()
             
-            # We no longer create middlewares here.
-            # Initial brain_manager is created with default tools.
-            # It will be updated/re-created per-run if tools change significantly.
-            self.brain_manager = BrainAgent(self.model, tool_manager.get_all_tools())
-            self.designer_manager = DesignerAgent(self.model)
+            # Create initial brain_manager with base tools only
+            initial_tools = self._get_base_tool_set()
+            self.brain_manager = BrainAgent(self.model, initial_tools)
+            self._last_tool_signature = self._get_tool_signature(initial_tools)
+            
             logger.info("Agent Components initialized successfully.")
 
     async def run(self, content: list):
@@ -58,148 +58,134 @@ class UltronBrain:
         has_image = any(isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "attachment" for item in content)
         has_webcam = any(isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "webcam" for item in content)
         
-        # 2. 获取之前的历史记录用于意图识别 (不包含当前 Turn)
-        history_for_intent = self.short_memory_manager.get()
-        
-        # 3. Explicit Step: Intent Refinement (Execute ONCE per turn)
-        # This converts "ok" -> "diagnose network" based on history
-        intent_response = await self.intent_manager.get_refined_query(
-            history=[{"role": m.get("role") if isinstance(m, dict) else getattr(m, 'type', 'human'), 
-                      "content": m.get("content") if isinstance(m, dict) else getattr(m, 'content', '')} 
-                     for m in history_for_intent],
-            current_query=raw_query,
-            has_image=has_image,
-            has_webcam=has_webcam
-        )
-        refined_query = intent_response.refined_query
-        require_webcam = intent_response.require_webcam
-        logger.info(f"Explicit Intent Refinement: '{raw_query}' -> '{refined_query}' (Webcam Needed: {require_webcam})")
-
-        # 4. Handle Message Filtering based on Intent
-        # We only filter out WEBCAM images if not required. Attachments are ALWAYS kept.
-        if has_webcam and not require_webcam:
-            content = [item for item in content if not (isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "webcam")]
-            logger.info("Filtering out webcam images as intent doesn't require them.")
-        
-        # 5. Add to short term history (After filtering)
+        # 2. Add to short term history
         self.short_memory_manager.add("user", content)
+        raw_history = self.short_memory_manager.get()
         
-        # 6. 获取包含当前 Turn 的完整历史，并过滤历史中多余的 WEBCAM 图像
-        # 策略：如果当前不需要 WEBCAM，则完全移除历史中的 WEBCAM 图像块以节省 Token
-        messages = self.short_memory_manager.get()
-        cleaned_messages = []
-        for m in messages:
-            msg_content = getattr(m, 'content', []) if not isinstance(m, dict) else m.get("content", [])
-            # 只有当这是当前轮次 (最后一轮) 且需要摄像头，或者是附件图像时，才保留图像块
-            # 这里简化逻辑：如果 require_webcam=False，移除所有非 attachment 的 image_url
-            if not require_webcam:
-                if isinstance(msg_content, list):
-                    filtered_content = [
-                        item for item in msg_content 
-                        if not (isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "webcam")
-                    ]
-                    # 如果过滤后内容为空，保留原始文本部分（如果有）
-                    if not filtered_content and msg_content:
-                        filtered_content = [item for item in msg_content if isinstance(item, dict) and item.get("type") == "text"]
-                    
-                    if isinstance(m, dict):
-                        m["content"] = filtered_content
-                    else:
-                        m.content = filtered_content
-            cleaned_messages.append(m)
-        
-        messages = cleaned_messages
-        
-        # 7. Inject Refined Query as the text part if it changed significantly
-        if refined_query != raw_query:
-            # Access the last message's content, handling both dict and object types
-            last_msg = messages[-1]
-            last_msg_content = last_msg.content if not isinstance(last_msg, dict) else last_msg.get("content", [])
+        # Sanitize messages aggressively: remove unrecognized types
+        messages = []
+        for msg in raw_history:
+            role = msg.get("role", "user")
+            content_val = msg.get("content", [])
             
-            # Ensure last_msg_content is a list for iteration
-            if not isinstance(last_msg_content, list):
-                last_msg_content = [last_msg_content] # Wrap in list if it's a single item
-
-            for item in last_msg_content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    item["text"] = f"[Refined Query: {refined_query}]\n{item['text']}"
-                    break
-
-        # 8. Explicit Step: Tool Selection
-        await tool_manager.refresh_if_needed()
-        all_tools = tool_manager.get_all_tools()
+            if isinstance(content_val, list):
+                # Filter to only keep supported types
+                sanitized_content = [
+                    part for part in content_val 
+                    if isinstance(part, dict) and part.get("type") in ("text", "image_url", "image")
+                ]
+                messages.append({"role": role, "content": sanitized_content})
+            elif isinstance(content_val, str):
+                messages.append({"role": role, "content": [{"type": "text", "text": content_val}]})
+            else:
+                messages.append({"role": role, "content": []})
         
-        # Retrieve names of relevant tools
-        # We always include skill-manager tools and the new search_memory tool
-        always_include = {"propose_skill", "acquire_skill", "enhance_skill"}
-        retrieved_names = set(self.retriever.retrieve(refined_query, k=5)) | always_include
+        # 3. Use raw query as refined query
+        refined_query = raw_query
         
-        # Construct actual tool list
-        selected_tools = [t for t in all_tools if t.name in retrieved_names]
-        # Append the Memory Search Tool explicitly
-        selected_tools.append(self.long_term_memory.get_tool())
+        # 4. Refresh skill index if needed
+        skill_index.refresh_if_needed()
         
-        logger.debug(f"Explicit Tool Selection: {len(selected_tools)} tools selected for this turn.")
-
-        # 5. Create a turn-specific BrainAgent with selected tools
-        # This is where the ReAct loop happens
-        brain_agent_instance = BrainAgent(self.model, selected_tools)
+        # 5. Build system prompt with cached skills summary
+        extended_system_prompt = self._get_cached_system_prompt()
         
-        max_retries = 2
-        last_error = None
         brain_response = None
-        system_prompt = Brain_Agent_Prompt
+        reply_text = ""
+        max_retries = 2  # Allow one agent rebuild
+        retry_count = 0
 
-        for attempt in range(max_retries):
+        while retry_count < max_retries:
             try:
-                current_messages = messages
-                if last_error:
-                    current_messages = messages + [
-                        {"role": "user", "content": f"The previous attempt failed with error: {last_error}. Please correct your approach and try again or use another tool."}
-                    ]
-                
-                brain_response = await brain_agent_instance.ainvoke(
-                    {"messages": [{"role": "system", "content": system_prompt}] + current_messages}
+                brain_response = await self.brain_manager.ainvoke(
+                    {"messages": [{"role": "system", "content": extended_system_prompt}] + messages}
                 )
                 reply_text = brain_response["structured_response"].reply
                 
-                # Reflection heuristic
-                if "I cannot" in reply_text or "I don't have" in reply_text:
-                    logger.debug("Agent admitted defeat, triggering reflection...")
-                    last_error = "You mentioned you couldn't do something. Remember you can use 'propose_skill' to acquire new capabilities."
-                    continue
+                # Check if agent requested skill reload
+                if self._should_reload_skills(reply_text):
+                    new_skills = self._extract_skills_from_response(reply_text)
+                    if new_skills:
+                        logger.info(f"Agent requested skills: {new_skills}")
+                        self._rebuild_agent_with_skills(new_skills)
+                        retry_count += 1
+                        # Clean up the RELOAD_AGENT marker from reply
+                        reply_text = "Loading relevant skills..."
+                        continue
                 
-                break # Success
+                # Success - break the loop
+                break
+                
             except Exception as e:
-                logger.error(f"Brain Agent attempt {attempt+1}/{max_retries} failed: {e}")
-                last_error = str(e)
-                if attempt == max_retries - 1:
-                    reply_text = f"I encountered an error while processing your request: {e}."
+                error_str = str(e)
+                if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+                    logger.warning(f"Gemini API Quota Exceeded (429): {error_str}")
+                    
+                    # Try to extract retry delay (e.g., "Please retry in 25.795275017s.")
+                    retry_wait = 30  # Default wait
+                    match = re.search(r"retry in (\d+\.?\d*)s", error_str)
+                    if match:
+                        retry_wait = float(match.group(1)) + 1  # Add a 1s buffer
+                    
+                    logger.info(f"Waiting {retry_wait:.2f}s before retrying...")
+                    await asyncio.sleep(retry_wait)
+                    continue  # Retry same loop iteration
+                
+                logger.error(f"Brain Agent failed: {e}")
+                reply_text = f"I encountered an error while processing your request: {e}."
+                break
 
-        yield {"reply": reply_text, "ui_component": None}
+        extracted_tool_calls = self._extract_tool_calls_from_response(brain_response)
+        yield {"reply": reply_text, "tool_calls": extracted_tool_calls}
 
         # 6. Explicit Step: Memory Storage (Post-call)
-        if intent_response.need_long_term_memory and brain_response:
-            logger.info("Explicit Memory Storage: Saving interaction...")
-            # We save the refined query and the assistant reply
+        if brain_response and brain_response["structured_response"].save_to_long_term_memory:
+            logger.info("AI Decision: Saving interaction to long-term memory...")
             self.long_term_memory.add_memory("user", refined_query)
             self.long_term_memory.add_memory("assistant", reply_text)
 
-        # 7. Designer Agent (UI)
-        if brain_response and brain_response["structured_response"].need_ui:
-            # Prepare UI Instructions for Designer
-            ui_instruction = brain_response["structured_response"].ui_instruction or "Create a useful visualization based on the response."
-            reply_text = brain_response["structured_response"].reply
+        ai_content = [{"type": "text", "text": reply_text}]
+        if extracted_tool_calls:
+            # We use a special prefix so the frontend can identify tool calls from history,
+            # but keep it as type 'text' to avoid 'Unrecognized message part type' error in LangChain.
+            import json
+            metadata = f"__TOOL_CALLS_METADATA__: {json.dumps(extracted_tool_calls)}"
+            ai_content.append({"type": "text", "text": metadata})
             
-            designer_agent = self.designer_manager.get_agent()
-            designer_system_prompt = f"{Designer_Agent_Prompt}\n\n## UI INSTRUCTION:\n{ui_instruction}"
-            
-            designer_messages = [{"role": "system", "content": designer_system_prompt}] + messages + [{"role": "ai", "content": reply_text}]
-            designer_response = await designer_agent.ainvoke({"messages": designer_messages})
-            designer_data = designer_response["structured_response"].model_dump()
-            yield {"reply": reply_text, "ui_component": designer_data}
+        self.short_memory_manager.add("ai", ai_content)
 
-        self.short_memory_manager.add("ai", [{"type": "text", "text": reply_text}])
+    def _extract_tool_calls_from_response(self, brain_response: dict) -> list:
+        """Extract tool calls and results from messages in the response."""
+        extracted = []
+        if not brain_response or "messages" not in brain_response:
+            return extracted
+            
+        messages = brain_response["messages"]
+        # Tool calls usually come in pairs: AIMessage (call) followed by ToolMessage (result)
+        for i, msg in enumerate(messages):
+            # Check for tool calls in message attributes (LangChain style)
+            tool_calls = getattr(msg, "tool_calls", [])
+            if tool_calls:
+                for tc in tool_calls:
+                    call_id = tc.get("id")
+                    tool_name = tc.get("name", "Tool")
+                    tool_input = str(tc.get("args", ""))
+                    
+                    tc_record = {
+                        "name": tool_name,
+                        "input": tool_input,
+                        "status": "success",
+                        "output": ""
+                    }
+                    
+                    # Look for corresponding ToolMessage in subsequent messages
+                    if call_id:
+                        for next_msg in messages[i+1:]:
+                            if getattr(next_msg, "tool_call_id", None) == call_id:
+                                tc_record["output"] = str(getattr(next_msg, "content", ""))
+                                break
+                    
+                    extracted.append(tc_record)
+        return extracted
 
     def _extract_raw_query(self, content: list) -> str:
         """Extracts text from message content list."""
@@ -209,3 +195,67 @@ class UltronBrain:
             if hasattr(item, "text"):
                 return item.text
         return str(content)
+    
+    def _get_base_tool_set(self):
+        """Get base tools that are always available"""
+        base_tools = tool_manager.get_base_tools()
+        base_tools.append(self.long_term_memory.get_tool())
+        base_tools.append(skill_index.get_retrieve_tool())
+        return base_tools
+    
+    def _get_tool_signature(self, tools):
+        """Generate signature for tool set"""
+        return hash(tuple(sorted(t.name for t in tools)))
+    
+    def _get_cached_system_prompt(self) -> str:
+        """
+        Build optimized system prompt dynamically based on context.
+        Only includes relevant sections to reduce token usage.
+        """
+        has_skills = len(self._current_skills) > 0
+        skills_summary = skill_index.get_all_skills_summary() if has_skills else ""
+        
+        # Build optimized prompt (30-40% fewer tokens than before)
+        prompt = build_system_prompt(
+            has_skills=has_skills,
+            has_memory=True,  # Memory tools always available
+            extended=False,  # Only use extended for complex scenarios
+            skills_summary=skills_summary
+        )
+        
+        logger.debug(f"Built prompt with {len(prompt.split())} words (skills: {has_skills})")
+        return prompt
+    
+    def _should_reload_skills(self, reply_text: str) -> bool:
+        """Check if agent requested skill reload"""
+        return "RELOAD_AGENT:" in reply_text
+    
+    def _extract_skills_from_response(self, reply_text: str) -> list:
+        """Extract skill names from RELOAD_AGENT marker"""
+        try:
+            marker = "RELOAD_AGENT:"
+            if marker in reply_text:
+                skills_str = reply_text.split(marker)[1].split()[0]  # Get first word after marker
+                skills = [s.strip() for s in skills_str.split(",")]
+                return skills
+        except Exception as e:
+            logger.error(f"Failed to extract skills from response: {e}")
+        return []
+    
+    def _rebuild_agent_with_skills(self, new_skills: list):
+        """Rebuild agent with additional skills"""
+        self._current_skills.update(new_skills)
+        
+        # Build complete tool set
+        base_tools = self._get_base_tool_set()
+        skill_tools = tool_manager.get_tools_for_skills(list(self._current_skills))
+        all_tools = base_tools + skill_tools
+        
+        # Rebuild agent
+        self.brain_manager = BrainAgent(self.model, all_tools)
+        self._last_tool_signature = self._get_tool_signature(all_tools)
+        
+        # Invalidate prompt cache (prompt will be rebuilt with new skills)
+        self._cached_prompt = None
+        
+        logger.info(f"Agent rebuilt with {len(all_tools)} tools (skills: {self._current_skills})")

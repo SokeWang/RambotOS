@@ -45,13 +45,13 @@ const VisionWindow = ({
                                     <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center">
                                         <Hand className="text-cyan-400 animate-pulse" />
                                     </div>
-                                    <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">使用底部抓取条移动</p>
+                                    <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">Drag the bottom bar to move</p>
                                 </div>
                                 <div className="p-10 bg-black/30 rounded-[3rem] border border-white/5 flex flex-col items-center justify-center space-y-4">
                                     <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center">
                                         <Activity className="text-blue-400" />
                                     </div>
-                                    <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">捏合全局以缩放视图</p>
+                                    <p className="text-sm font-medium text-white/50 text-center uppercase tracking-widest">Pinch in the air to zoom view</p>
                                 </div>
                             </div>
                         </div>

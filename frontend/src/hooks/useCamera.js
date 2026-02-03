@@ -30,10 +30,10 @@ export const useCamera = (addLog, enabled = true) => {
                     setSelectedCameraId(videoDevices[0].deviceId);
                 }
 
-                addLog('system', `发现 ${videoDevices.length} 个摄像头`);
+                addLog('system', `Found ${videoDevices.length} camera(s)`);
             } catch (err) {
                 console.error("Failed to enumerate cameras:", err);
-                addLog('error', '无法枚举摄像头');
+                addLog('error', 'Failed to enumerate cameras');
             }
         };
 
@@ -47,7 +47,7 @@ export const useCamera = (addLog, enabled = true) => {
                 stream.getTracks().forEach(track => track.stop());
                 setStream(null);
                 setCameraActive(false);
-                addLog('system', '摄像头已释放');
+                addLog('system', 'Camera released');
             }
             return;
         }
@@ -59,7 +59,7 @@ export const useCamera = (addLog, enabled = true) => {
         const startCamera = async () => {
             try {
                 console.log("Starting camera:", selectedCameraId);
-                addLog('system', '正在启动摄像头...');
+                addLog('system', 'Starting camera...');
 
                 // Stop previous stream if exists
                 if (stream) {
@@ -80,12 +80,12 @@ export const useCamera = (addLog, enabled = true) => {
                 console.log("Camera access granted!");
                 setStream(s);
 
-                const cameraName = availableCameras.find(c => c.deviceId === selectedCameraId)?.label || '未知摄像头';
+                const cameraName = availableCameras.find(c => c.deviceId === selectedCameraId)?.label || 'Unknown Camera';
                 addLog('system', `✅ ${cameraName}`);
 
             } catch (err) {
                 console.error("Camera access failed:", err.name, err.message);
-                addLog('error', `摄像头访问失败: ${err.message}`);
+                addLog('error', `Camera access failed: ${err.message}`);
                 setCameraActive(false);
             }
         };
@@ -105,19 +105,19 @@ export const useCamera = (addLog, enabled = true) => {
         if (captureRef.current && stream) {
             captureRef.current.srcObject = stream;
 
-            // 添加loadeddata事件监听，确保视频准备好
+            // Add loadeddata event listener to ensure video is ready
             const videoElement = captureRef.current;
 
             const onLoadedData = () => {
                 setCameraActive(true);
-                addLog('system', `📹 摄像头就绪 (${videoElement.videoWidth}x${videoElement.videoHeight})`);
+                addLog('system', `📹 Camera ready (${videoElement.videoWidth}x${videoElement.videoHeight})`);
             };
 
-            // 如果视频已经ready，立即设置
+            // If video is already ready, set it immediately
             if (videoElement.readyState >= 2) {
                 onLoadedData();
             } else {
-                // 否则等待loadeddata事件
+                // Otherwise wait for loadeddata event
                 videoElement.addEventListener('loadeddata', onLoadedData, { once: true });
             }
 
@@ -127,7 +127,7 @@ export const useCamera = (addLog, enabled = true) => {
                 videoElement.removeEventListener('loadeddata', onLoadedData);
             };
         } else if (!stream) {
-            // 如果stream被移除，设置cameraActive为false
+            // If stream is removed, set cameraActive to false
             setCameraActive(false);
         }
     }, [stream, addLog]);

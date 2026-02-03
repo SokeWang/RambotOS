@@ -9,7 +9,7 @@ class Ultron:
     def __init__(self):
         self.ear = ASRFactory.get_asr_engine()
         self.brain = UltronBrain()
-        self.mouth = TTSFactory.get_tts_engine("edge")
+        self.mouth = TTSFactory.get_tts_engine("edge", voice="en-GB-SoniaNeural")
 
     async def initialize(self):
         """Pre-load brain components"""
@@ -52,7 +52,7 @@ class Ultron:
                     logger.error(f"TTS generation failed: {type(e).__name__}: {e}")
         else:
             yield {
-                "text": {"reply": "I couldn't hear you.", "ui_component": None},
+                "text": {"reply": "I couldn't hear you."},
                 "audio": None
             }
 
