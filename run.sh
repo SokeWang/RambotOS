@@ -12,7 +12,9 @@ $PYTHON_EXE --version
 echo "Shutting down existing Rambot processes..."
 pkill -f rambot_core.py
 pkill -f standalone_monitor.py
+pkill -f standalone_telegram.py
 rm -f /tmp/rambot_email_monitor.pid
+rm -f /tmp/rambot_telegram_monitor.pid
 
 # 2. Start Rambot Core (FastAPI) in the background
 echo "Starting Rambot Core Service..."
@@ -36,11 +38,20 @@ while ! curl -s http://127.0.0.1:8000/ > /dev/null; do
 done
 echo "Rambot Core is UP."
 
+# 2.5 Start Standalone Monitors
+echo "Starting Email Monitor..."
+$PYTHON_EXE standalone_monitor.py > email.log 2>&1 &
+EMAIL_PID=$!
+
+echo "Starting Telegram Monitor..."
+$PYTHON_EXE standalone_telegram.py > telegram.log 2>&1 &
+TG_PID=$!
+
 # 3. Start the main GUI
 echo "Launching Rambot OS GUI..."
 $PYTHON_EXE gui.py
 
 # 4. Cleanup on GUI exit
 echo "OS exited. Cleaning up services..."
-kill $CORE_PID 2>/dev/null
+kill $CORE_PID $EMAIL_PID $TG_PID 2>/dev/null
 echo "Done."

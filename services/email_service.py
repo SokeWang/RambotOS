@@ -1,42 +1,70 @@
 import asyncio
+import requests
+import json
+import os
+import shlex
 from loguru import logger
-from tools.mail_tools import search_mail, get_mail_thread, send_mail_message, update_mail_state
-from core.chat_prompt import Email_Replier_Prompt
-from core.memory import MemoryManager
+from config.config import CFG
 
 class EmailService:
-    def __init__(self, ultron_brain, notification_callback=None):
-        self.brain = ultron_brain
+    def __init__(self, brain=None, notification_callback=None):
+        self.brain = brain
         self.notification_callback = notification_callback
-        self.memory = MemoryManager()
-        
-        # Use Generic Mail Tools
-        self.search_tool = search_mail
-        self.thread_tool = get_mail_thread
-        self.send_tool = send_mail_message
-        self.mark_read_tool = update_mail_state
-        
-        if not all([self.search_tool, self.thread_tool, self.send_tool]):
-             logger.warning("EmailService: Some essential 163 Mail tools are missing!")
+        self.scripts_path = os.path.join(CFG.SKILLS_PATH, "agentmail/scripts")
+
+    async def _call_script(self, script_name: str, args_dict: dict = None) -> Any:
+        """
+        Execute a skill script via CLI and return parsed JSON or raw output.
+        """
+        script_path = os.path.join(self.scripts_path, script_name)
+        if not os.path.exists(script_path):
+            logger.error(f"EmailService: Script not found at {script_path}")
+            return None
+
+        cmd = ["python3", script_path]
+        if args_dict:
+            for key, value in args_dict.items():
+                if value is not None:
+                    cmd.append(f"--{key}")
+                    cmd.append(str(value))
+
+        try:
+            logger.debug(f"EmailService: Executing {' '.join(cmd)}")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"EmailService: Script {script_name} failed with code {proc.returncode}\nStderr: {stderr.decode()}")
+                return None
+
+            output = stdout.decode().strip()
+            try:
+                return json.loads(output)
+            except json.JSONDecodeError:
+                return output
+        except Exception as e:
+            logger.error(f"EmailService: Error executing script {script_name}: {e}")
+            return None
 
     async def check_and_reply(self):
         """
-        Background task to scan for unread replies and handle them.
+        Background task to scan for unread replies and handle them by calling scripts.
         """
         try:
-            logger.info("EmailService: Checking for unread emails...")
-            # 1. Search for unread messages
-            unread_query = "is:unread label:inbox"
-            search_results = await self.search_tool.ainvoke({"query": unread_query})
+            logger.info("EmailService: Checking for unread emails via scripts...")
             
-            if not search_results or "No messages found" in str(search_results):
-                logger.debug("EmailService: No unread emails found.")
+            # 1. Search for unread messages
+            search_results = await self._call_script("search_messages.py", {"query": "is:unread label:inbox"})
+            
+            if not search_results or not isinstance(search_results, list):
+                logger.debug("EmailService: No unread emails found or invalid response.")
                 return
 
-            messages = search_results if isinstance(search_results, list) else []
-            
-            for msg in messages:
-                # IMAP uses 'id' for the message/thread reference
+            for msg in search_results:
                 msg_id = msg.get("id")
                 subject = msg.get("subject", "No Subject")
                 sender = msg.get("sender", "Unknown Sender")
@@ -45,27 +73,37 @@ class EmailService:
                     continue
                 
                 # 2. Get Thread History
-                thread = await self.thread_tool.ainvoke({"thread_id": msg_id})
+                thread = await self._call_script("get_thread.py", {"thread_id": msg_id})
                 if not thread or "messages" not in thread:
                     logger.warning(f"EmailService: Could not fetch thread for {msg_id}")
                     continue
                 
                 # 3. Verify if this is a thread RAMBOT should handle
-                # Rule: RAMBOT signature is present OR subject/body contains 'rambot' (for testing)
                 is_rambot_thread = False
                 all_msgs = thread.get("messages", [])
                 
-                # Check if subject says Rambot (Direct hit)
-                if "rambot" in subject.lower():
+                master_email = CFG.USER_EMAIL
+                try:
+                    p_resp = requests.get("http://127.0.0.1:8000/user/profile", timeout=5)
+                    if p_resp.status_code == 200:
+                        master_email = p_resp.json().get("email", CFG.USER_EMAIL)
+                except:
+                    pass
+
+                if sender == master_email:
+                    is_rambot_thread = True
+                
+                if not is_rambot_thread and "rambot" in subject.lower():
                     is_rambot_thread = True
                 
                 if not is_rambot_thread:
                     for t_msg in all_msgs:
-                        body = (t_msg.get("body") or "").lower()
-                        # Signature match OR just mentioning Rambot in a reply
-                        if "rambot" in body:
+                        if "rambot" in (t_msg.get("body") or "").lower():
                             is_rambot_thread = True
                             break
+                
+                if CFG.MAIL_PROVIDER == "agentmail":
+                    is_rambot_thread = True
                 
                 if not is_rambot_thread:
                     logger.info(f"EmailService: New human email from {sender}. Notifying user.")
@@ -73,68 +111,51 @@ class EmailService:
                         self.notification_callback(f"Sir, you have a new email from {sender}: \"{subject}\".")
                     continue
 
-                logger.info(f"EmailService: Processing RAMBOT-active thread {msg_id}...")
-                
-                # 4. Retrieve Original Intent from Memory
-                snippet = all_msgs[0].get("snippet", "")
-                semantic_query = f"Email subject: {subject}. Content: {snippet}"
-                original_intent_results = self.memory.retrieve_memories(semantic_query, k=1)
-                original_intent = original_intent_results[0]["content"] if original_intent_results else "Maintain professional communication on behalf of the user."
-
-                # 5. Generate Reply using BrainAgent
+                # 4. Delegate to Message Gateway
+                logger.info(f"EmailService: Sending thread {msg_id} to Gateway...")
                 history_text = "\n".join([f"{m.get('sender', 'Unknown')}: {m.get('body', '')}" for m in all_msgs])
                 
-                replier_messages = [
-                    {"role": "system", "content": Email_Replier_Prompt},
-                    {"role": "user", "content": f"## ORIGINAL INTENT:\n{original_intent}\n\n## EMAIL THREAD HISTORY:\n{history_text}\n\nHow should RAMBOT respond to the latest message?"}
-                ]
+                chat_payload = {
+                    "message": f"## EMAIL THREAD HISTORY:\n{history_text}\n\nSubject: {subject}",
+                    "sender": sender
+                }
                 
-                agent = self.brain.brain_manager
-                response = await agent.ainvoke({"messages": replier_messages})
-                
-                # Robustly get the structured response
-                structured_response = response.get("structured_response")
-                if not structured_response:
-                    logger.warning(f"EmailService: Agent failed to provide a structured response for {msg_id}")
+                try:
+                    resp = requests.post("http://127.0.0.1:8000/chat", json=chat_payload, timeout=60)
+                    if resp.status_code != 200:
+                        logger.error(f"EmailService: Gateway error {resp.status_code}")
+                        continue
+                        
+                    brain_response = resp.json()
+                    reply_body = brain_response.get("reply")
+                except Exception as e:
+                    logger.error(f"EmailService: Failed to contact Gateway: {e}")
+                    # Special error message if gateway is down
+                    reply_body = "I'm sorry, I'm having trouble connecting to my central brain right now."
                     continue
 
-                # Support both Pydantic object and dict
-                def get_val(obj, key, default=None):
-                    if hasattr(obj, key): return getattr(obj, key)
-                    if isinstance(obj, dict): return obj.get(key, default)
-                    return default
-
-                reply_body = get_val(structured_response, 'reply')
-                need_ui = get_val(structured_response, 'need_ui', False)
-
                 if not reply_body:
-                    logger.warning(f"EmailService: Empty reply generated for {msg_id}")
+                    logger.warning(f"EmailService: No reply from Gateway for {msg_id}")
                     continue
                 
                 # 6. Send Reply
-                last_msg = all_msgs[-1]
-                await self.send_tool.ainvoke({
+                await self._call_script("send_message.py", {
                     "message": reply_body,
-                    "to": last_msg.get("sender"),
+                    "to": sender,
                     "subject": f"Re: {subject}",
                     "thread_id": msg_id
                 })
                 
                 # 7. Mark as Read
-                if self.mark_read_tool:
-                    await self.mark_read_tool.ainvoke({
-                        "message_id": msg_id,
-                        "remove_label_ids": ["UNREAD"]
-                    })
+                await self._call_script("update_status.py", {
+                    "message_id": msg_id,
+                    "status": "read"
+                })
                 
                 logger.info(f"EmailService: Replied to thread {msg_id} and marked as read.")
 
-                # 8. Always Notify user on auto-reply
                 if self.notification_callback:
-                    notify_msg = f"RAMBOT: Auto-replied to {sender} regarding '{subject}'."
-                    if need_ui:
-                        notify_msg += " Action required."
-                    self.notification_callback(notify_msg)
+                    self.notification_callback(f"RAMBOT: Auto-replied to {sender} regarding '{subject}'.")
 
         except Exception as e:
             logger.error(f"EmailService: Error in check_and_reply: {e}")

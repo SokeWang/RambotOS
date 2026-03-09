@@ -25,6 +25,23 @@ def start_core():
         logger.error(f"Failed to start Rambot Core: {e}")
         return None
 
+def start_telegram():
+    """Start the Telegram Monitor service."""
+    logger.info("Starting Telegram Monitor Service...")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "standalone_telegram.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            close_fds=True if os.name != "nt" else False
+        )
+        return proc
+    except Exception as e:
+        logger.error(f"Failed to start Telegram Monitor: {e}")
+        return None
+
 def wait_for_core():
     """Wait for Rambot Core to be ready."""
     logger.info("Waiting for Core to initialize...")
@@ -59,6 +76,9 @@ def main():
         core_proc.terminate()
         sys.exit(1)
 
+    # 2.5 Start Telegram Monitor
+    tg_proc = start_telegram()
+
     # 3. Start GUI
     logger.info("Launching Rambot OS GUI...")
     try:
@@ -77,6 +97,13 @@ def main():
                 core_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 core_proc.kill()
+        
+        if tg_proc and tg_proc.poll() is None:
+            tg_proc.terminate()
+            try:
+                tg_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                tg_proc.kill()
         logger.info("Done.")
 
 if __name__ == "__main__":

@@ -34,42 +34,87 @@ class MemoryManager:
             logger.error(f"Failed to initialize ChromaDB: {e}")
             raise e
 
-    def add_memory(self, role: str, content: str):
+    def add_fact(self, fact: Dict, session_id: str = "global"):
         """
-        Add a message to long-term memory with its embedding.
+        Add a structured fact to long-term memory.
+        fact: {"subject": "...", "predicate": "...", "object": "..."}
         """
         try:
-            text = f"{role}: {content}"
-            embedding = self.embeddings.embed_query(text)
+            subject = fact.get("subject", "").strip()
+            predicate = fact.get("predicate", "").strip()
+            obj = fact.get("object", "").strip()
             
-            # Generate a unique ID based on timestamp and role
-            mem_id = f"{role}_{time.time()}"
+            if not subject or not predicate or not obj:
+                return
+
+            text = f"{subject} {predicate} {obj}"
+            
+            # Check for existing identical facts in this session to prevent duplicates
+            # We use a filter for the exact triple and session
+            existing = self.collection.get(
+                where={
+                    "$and": [
+                        {"session_id": session_id},
+                        {"subject": subject},
+                        {"predicate": predicate},
+                        {"object": obj}
+                    ]
+                },
+                limit=1
+            )
+
+            if existing and existing['ids']:
+                # Fact exists, just update the timestamp
+                mem_id = existing['ids'][0]
+                self.collection.update(
+                    ids=[mem_id],
+                    metadatas=[{
+                        "type": "fact",
+                        "subject": subject,
+                        "predicate": predicate,
+                        "object": obj,
+                        "timestamp": time.time(),
+                        "session_id": session_id
+                    }]
+                )
+                logger.info(f"Updated timestamp for existing Fact (Session: {session_id}): {text}")
+                return
+
+            # New fact, add it
+            embedding = self.embeddings.embed_query(text)
+            mem_id = f"fact_{time.time()}_{session_id}"
             
             self.collection.add(
                 ids=[mem_id],
                 embeddings=[embedding],
                 metadatas=[{
-                    "role": role,
-                    "content": content,
-                    "timestamp": time.time()
+                    "type": "fact",
+                    "subject": subject,
+                    "predicate": predicate,
+                    "object": obj,
+                    "timestamp": time.time(),
+                    "session_id": session_id
                 }],
                 documents=[text]
             )
-            logger.info(f"Added to ChromaDB memory: {role}: {content[:50]}...")
+            logger.info(f"Added Fact to ChromaDB (Session: {session_id}): {text}")
         except Exception as e:
-            logger.error(f"Failed to add to ChromaDB memory: {e}")
+            logger.error(f"Failed to add fact to ChromaDB: {e}")
 
-    def retrieve_memories(self, query: str, k: int = 3) -> List[Dict]:
+
+
+    def retrieve_memories(self, query: str, session_id: str = "global", k: int = 5) -> List[Dict]:
         """
-        Retrieve top-k relevant memories based on the query.
+        Retrieve top-k relevant facts for a specific session.
         """
         try:
             query_embedding = self.embeddings.embed_query(query)
             
-            # Query ChromaDB
+            # Query ChromaDB with session_id filter
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=k,
+                where={"session_id": session_id},
                 include=["metadatas", "documents"]
             )
             
@@ -79,26 +124,30 @@ class MemoryManager:
                     metadata = results['metadatas'][0][i]
                     doc = results['documents'][0][i]
                     memories.append({
-                        "role": metadata.get("role"),
-                        "content": metadata.get("content"),
+                        "id": results['ids'][0][i],
+                        "subject": metadata.get("subject"),
+                        "predicate": metadata.get("predicate"),
+                        "object": metadata.get("object"),
                         "text": doc,
                         "timestamp": metadata.get("timestamp")
                     })
             
-            logger.info(f"Retrieved {len(memories)} memories from ChromaDB for query: {query[:50]}...")
+            logger.info(f"Retrieved {len(memories)} facts for session {session_id}")
             return memories
         except Exception as e:
-            logger.error(f"Failed to retrieve memories from ChromaDB: {e}")
+            logger.error(f"Failed to retrieve memories for session {session_id}: {e}")
             return []
 
-    def get_all_memories(self, limit: int = 100) -> List[Dict]:
-        """
-        Retrieve all memories from ChromaDB.
-        """
+    def get_all_memories(self, session_id: str = None) -> List[Dict]:
+        # Implementation remains similar but returns fact fields
         try:
+            query = {}
+            if session_id:
+                query = {"session_id": session_id}
+                
             results = self.collection.get(
+                where=query if query else None,
                 include=["metadatas", "documents"],
-                limit=limit
             )
             
             memories = []
@@ -108,38 +157,19 @@ class MemoryManager:
                     doc = results['documents'][i]
                     memories.append({
                         "id": results['ids'][i],
-                        "role": metadata.get("role"),
-                        "content": metadata.get("content"),
+                        "subject": metadata.get("subject"),
+                        "predicate": metadata.get("predicate"),
+                        "object": metadata.get("object"),
                         "text": doc,
-                        "timestamp": metadata.get("timestamp")
+                        "timestamp": metadata.get("timestamp"),
+                        "session_id": metadata.get("session_id", "global")
                     })
             
-            # Sort by timestamp (descending)
             memories.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
             return memories
         except Exception as e:
-            logger.error(f"Failed to get all memories from ChromaDB: {e}")
+            logger.error(f"Failed to get memories: {e}")
             return []
 
-    def get_tool(self):
-        """
-        Returns a LangChain tool for searching long-term memory.
-        """
-        from langchain_core.tools import tool
-
-        @tool
-        def search_memory(query: str):
-            """
-            Search your long-term memory for past conversations, personal facts, and previous interactions.
-            Use this when the user asks about something you should remember from the past.
-            """
-            memories = self.retrieve_memories(query, k=5)
-            if not memories:
-                return "No relevant past memories found."
-            
-            res = "Found the following relevant past interactions:\n"
-            for m in memories:
-                res += f"- [{m['role']}]: {m['content']}\n"
-            return res
-
-        return search_memory
+# Export global singleton
+memory_manager = MemoryManager()

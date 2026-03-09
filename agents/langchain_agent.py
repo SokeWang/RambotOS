@@ -2,177 +2,228 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from config.config import CFG
 from core.history import History
 from loguru import logger
-from agents.brain import BrainAgent
-from tools.tool_manager import tool_manager
-from tools.skill_index import skill_index
-from core.chat_prompt import build_system_prompt  # Updated import
+from agents.tool_manager import tool_manager
+from core.skill_index import skill_index
+from langchain.agents import create_agent
+from core.chat_prompt import build_system_prompt
 from core.memory import MemoryManager
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from models.schema import AIResponse, MemoryExtraction
 import asyncio
 import re
+from collections import OrderedDict
+from agents.base_agent import BaseAgent
+from typing import Any, List, AsyncGenerator
 
-class UltronBrain:
+class LangchainBrain(BaseAgent):
     def __init__(self):
         self.model = ChatGoogleGenerativeAI(
             model=CFG.chat_model,
-            api_key=CFG.api_key
+            api_key=CFG.api_key,
+            max_retries=10  # Integrated retry logic
         )
 
-        self.short_memory_manager = History()
+        self.histories: dict[str, History] = {}
         self.long_term_memory = MemoryManager()
         
-        self.brain_manager = None
+        self._AGENT_CACHE_MAX = 100
+        self.agent_managers: OrderedDict[str, Any] = OrderedDict()
         self._init_lock = asyncio.Lock()
-        
-        # Skill management
-        self._current_skills = set()  # Skills loaded in current session
-        self._last_tool_signature = None
-        self._cached_tools = None
-        self._cached_prompt = None
+        self._cached_prompt: dict[str, str] = {}
+
+    def get_history(self, session_id: str) -> History:
+        """Get or create History manager for a session."""
+        if session_id not in self.histories:
+            self.histories[session_id] = History(session_id=session_id)
+        return self.histories[session_id]
 
     async def initialize(self):
         async with self._init_lock:
-            if self.brain_manager:
+            if self.agent_managers:
                 return
             
-            logger.info("Initializing Agent Components (Explicit Architecture)...")
+            logger.info("Initializing Agent Components...")
             
-            # Initialize ToolManager and perform first discovery
-            await tool_manager.initialize()
-            
-            # Initialize SkillIndex
+            # Initial discovery
             skill_index.initialize()
-            
-            # Create initial brain_manager with base tools only
-            initial_tools = self._get_base_tool_set()
-            self.brain_manager = BrainAgent(self.model, initial_tools)
-            self._last_tool_signature = self._get_tool_signature(initial_tools)
-            
-            logger.info("Agent Components initialized successfully.")
 
-    async def run(self, content: list):
-        if not self.brain_manager:
+    def get_agent(self, session_id: str, skills: list = None) -> Any:
+        """Get or create an Agent (LRU-bounded cache)."""
+        skills_tuple = tuple(sorted(skills)) if skills else ()
+        agent_key = f"{session_id}_{hash(skills_tuple)}"
+        
+        if agent_key in self.agent_managers:
+            # Move to end to mark as recently used
+            self.agent_managers.move_to_end(agent_key)
+        else:
+            logger.info(f"Creating Agent for session: {session_id}")
+            all_tools = tool_manager.get_tools(session_id=session_id, skills=skills)
+            self.agent_managers[agent_key] = create_agent(
+                model=self.model,
+                tools=all_tools,
+                response_format=AIResponse
+            )
+            # Evict least-recently-used entry if over limit
+            if len(self.agent_managers) > self._AGENT_CACHE_MAX:
+                self.agent_managers.popitem(last=False)
+        
+        return self.agent_managers[agent_key]
+
+    async def run(self, content: list, is_master: bool = True, session_id: str = "global", user_name: str = "User") -> AsyncGenerator[dict, None]:
+        if not self.agent_managers:
             await self.initialize()
 
-        # 1. Extract raw query and check for media
+        # 1. Prepare history and messages
         raw_query = self._extract_raw_query(content)
-        has_image = any(isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "attachment" for item in content)
-        has_webcam = any(isinstance(item, dict) and item.get("type") == "image_url" and item.get("media_source") == "webcam" for item in content)
+        history_manager = self.get_history(session_id)
+        await history_manager.add("user", content)
+        raw_history = await history_manager.get()
+        formatted_messages = self._prepare_messages(raw_history)
         
-        # 2. Add to short term history
-        self.short_memory_manager.add("user", content)
-        raw_history = self.short_memory_manager.get()
+        # 2. Prepare environment
+        skill_index.refresh_if_needed()
+        system_prompt = self._get_cached_system_prompt(is_master=is_master, user_name=user_name)
         
-        # Sanitize messages aggressively: remove unrecognized types
-        messages = []
+        # 3. Execute agent loop with retries and streaming
+        brain_response = None
+        async for chunk in self._execute_agent_loop(session_id, system_prompt, formatted_messages):
+            if isinstance(chunk, dict) and "brain_response" in chunk:
+                brain_response = chunk["brain_response"]
+            else:
+                yield chunk
+
+        if brain_response:
+            # 4. Process response
+            reply_text, tool_calls, gen_ui = self._process_response_content(brain_response)
+            
+            # 5. Yield final result
+            yield {"reply": reply_text, "tool_calls": tool_calls, "gen_ui": gen_ui}
+
+            # 6. Post-Processing
+            await self._save_history_and_memory(session_id, history_manager, raw_query, reply_text, tool_calls, brain_response)
+
+    def _prepare_messages(self, raw_history: list) -> list:
+        """Converts raw history into LangChain message objects."""
+        formatted_messages = []
         for msg in raw_history:
             role = msg.get("role", "user")
-            content_val = msg.get("content", [])
+            content = msg.get("content", [])
             
-            if isinstance(content_val, list):
-                # Filter to only keep supported types
-                sanitized_content = [
-                    part for part in content_val 
-                    if isinstance(part, dict) and part.get("type") in ("text", "image_url", "image")
-                ]
-                messages.append({"role": role, "content": sanitized_content})
-            elif isinstance(content_val, str):
-                messages.append({"role": role, "content": [{"type": "text", "text": content_val}]})
+            # LangChain HumanMessage handles dict-based multimodal content natively
+            if role in ("ai", "assistant"):
+                formatted_messages.append(AIMessage(content=content if isinstance(content, str) else str(content)))
             else:
-                messages.append({"role": role, "content": []})
-        
-        # 3. Use raw query as refined query
-        refined_query = raw_query
-        
-        # 4. Refresh skill index if needed
-        skill_index.refresh_if_needed()
-        
-        # 5. Build system prompt with cached skills summary
-        extended_system_prompt = self._get_cached_system_prompt()
-        
+                formatted_messages.append(HumanMessage(content=content))
+        return formatted_messages
+
+    async def _execute_agent_loop(self, session_id: str, system_prompt: str, formatted_messages: list):
+        """Executes the agent loop with retry logic and yields progress updates."""
+        internal_turns = []
         brain_response = None
-        reply_text = ""
-        max_retries = 2  # Allow one agent rebuild
-        retry_count = 0
+        # Simplified loop: Model-level retries handle transient errors; high-level loop for tool execution
+        try:
+            current_agent = self.get_agent(session_id)
+            current_messages = [SystemMessage(content=system_prompt)] + formatted_messages + internal_turns
 
-        while retry_count < max_retries:
-            try:
-                brain_response = await self.brain_manager.ainvoke(
-                    {"messages": [{"role": "system", "content": extended_system_prompt}] + messages}
-                )
-                reply_text = brain_response["structured_response"].reply
+            async for event in current_agent.astream_events(
+                {"messages": current_messages},
+                version="v2",
+                config={"recursion_limit": CFG.recursion_limit}
+            ):
+                if not isinstance(event, dict): continue
+                kind = event.get("event")
                 
-                # Check if agent requested skill reload
-                if self._should_reload_skills(reply_text):
-                    new_skills = self._extract_skills_from_response(reply_text)
-                    if new_skills:
-                        logger.info(f"Agent requested skills: {new_skills}")
-                        self._rebuild_agent_with_skills(new_skills)
-                        retry_count += 1
-                        # Clean up the RELOAD_AGENT marker from reply
-                        reply_text = "Loading relevant skills..."
-                        continue
+                if kind == "on_chat_model_end":
+                    output = event.get("data", {}).get("output")
+                    if isinstance(output, AIMessage) and output.tool_calls:
+                        internal_turns.append(output)
                 
-                # Success - break the loop
-                break
+                elif kind == "on_tool_start":
+                    if event.get("name") != "AIResponse":
+                        yield {"reply": f"Processing with {event.get('name')}...", "tool_calls": [{"name": event.get("name"), "status": "running"}]}
                 
-            except Exception as e:
-                error_str = str(e)
-                if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
-                    logger.warning(f"Gemini API Quota Exceeded (429): {error_str}")
-                    
-                    # Try to extract retry delay (e.g., "Please retry in 25.795275017s.")
-                    retry_wait = 30  # Default wait
-                    match = re.search(r"retry in (\d+\.?\d*)s", error_str)
-                    if match:
-                        retry_wait = float(match.group(1)) + 1  # Add a 1s buffer
-                    
-                    logger.info(f"Waiting {retry_wait:.2f}s before retrying...")
-                    await asyncio.sleep(retry_wait)
-                    continue  # Retry same loop iteration
+                elif kind == "on_tool_end":
+                    if event.get("name") != "AIResponse":
+                        tool_output = event.get("data", {}).get("output", "")
+                        call_id = event.get("data", {}).get("tool_call_id") or event.get("run_id")
+                        internal_turns.append(ToolMessage(content=str(tool_output), tool_call_id=call_id))
+                        yield {"reply": f"Finished {event.get('name')}.", "tool_calls": [{"name": event.get('name'), "status": "success", "output": str(tool_output)}]}
                 
-                logger.error(f"Brain Agent failed: {e}")
-                reply_text = f"I encountered an error while processing your request: {e}."
-                break
-
-        extracted_tool_calls = self._extract_tool_calls_from_response(brain_response)
-        yield {"reply": reply_text, "tool_calls": extracted_tool_calls}
-
-        # 6. Explicit Step: Memory Storage (Post-call)
-        if brain_response and brain_response["structured_response"].save_to_long_term_memory:
-            logger.info("AI Decision: Saving interaction to long-term memory...")
-            self.long_term_memory.add_memory("user", refined_query)
-            self.long_term_memory.add_memory("assistant", reply_text)
-
-        ai_content = [{"type": "text", "text": reply_text}]
-        if extracted_tool_calls:
-            # We use a special prefix so the frontend can identify tool calls from history,
-            # but keep it as type 'text' to avoid 'Unrecognized message part type' error in LangChain.
-            import json
-            metadata = f"__TOOL_CALLS_METADATA__: {json.dumps(extracted_tool_calls)}"
-            ai_content.append({"type": "text", "text": metadata})
+                elif kind == "on_chain_end":
+                    output = event.get("data", {}).get("output")
+                    if isinstance(output, dict) and "structured_response" in output:
+                        brain_response = output
             
-        self.short_memory_manager.add("ai", ai_content)
+            if brain_response:
+                yield {"brain_response": brain_response}
+                
+        except Exception as e:
+            logger.error(f"Brain Agent execution failed: {e}")
+            yield {"reply": f"Error: {e}", "tool_calls": []}
+
+    def _process_response_content(self, brain_response: dict):
+        """Extracts reply, tool calls, and GenUI content from brain_response."""
+        sr = brain_response.get("structured_response")
+        reply_text = getattr(sr, "reply", "")
+        tool_calls = self._extract_tool_calls_from_response(brain_response)
+        
+        gen_ui = None
+        if hasattr(sr, "gen_ui") and sr.gen_ui:
+            if isinstance(sr.gen_ui, list):
+                gen_ui = [c.model_dump() if hasattr(c, "model_dump") else c for c in sr.gen_ui]
+            else:
+                gen_ui = sr.gen_ui.model_dump() if hasattr(sr.gen_ui, "model_dump") else sr.gen_ui
+        
+        return reply_text, tool_calls, gen_ui
+
+    async def _save_history_and_memory(self, session_id, history_manager, raw_query, reply_text, tool_calls, brain_response):
+        """Saves interaction to history and potentially to long-term memory."""
+        ai_content = [{"type": "text", "text": reply_text}]
+        if tool_calls:
+            import json
+            ai_content.append({"type": "text", "text": f"__TOOL_CALLS_METADATA__: {json.dumps(tool_calls)}"})
+            
+        await history_manager.add("ai", ai_content)
+
+        if brain_response["structured_response"].save_to_long_term_memory:
+            asyncio.create_task(self._extract_knowledge(raw_query, reply_text, session_id))
+
+    async def _extract_knowledge(self, user_query: str, ai_reply: str, session_id: str):
+        """
+        Autonomous extraction of facts from a specific interaction.
+        Uses structured output directly (no agent overhead needed).
+        """
+        
+        extraction_prompt = f"Extract meaningful facts about the user from this interaction:\nUser: {user_query}\nAI: {ai_reply}"
+        
+        try:
+            # Direct structured output call — no agent/tool overhead needed
+            structured_model = self.model.with_structured_output(MemoryExtraction)
+            extracted = await structured_model.ainvoke([HumanMessage(content=extraction_prompt)])
+            
+            if extracted and hasattr(extracted, "facts"):
+                for fact in extracted.facts:
+                    self.long_term_memory.add_fact(fact.dict(), session_id=session_id)
+        except Exception as e:
+            logger.error(f"Knowledge extraction failed: {e}")
 
     def _extract_tool_calls_from_response(self, brain_response: dict) -> list:
         """Extract tool calls and results from messages in the response."""
         extracted = []
-        if not brain_response or "messages" not in brain_response:
-            return extracted
-            
-        messages = brain_response["messages"]
+        messages = brain_response.get("messages", [])
         # Tool calls usually come in pairs: AIMessage (call) followed by ToolMessage (result)
         for i, msg in enumerate(messages):
             # Check for tool calls in message attributes (LangChain style)
             tool_calls = getattr(msg, "tool_calls", [])
             if tool_calls:
                 for tc in tool_calls:
+                    if tc.get("name") == "AIResponse":
+                        continue
+                        
                     call_id = tc.get("id")
-                    tool_name = tc.get("name", "Tool")
-                    tool_input = str(tc.get("args", ""))
-                    
                     tc_record = {
-                        "name": tool_name,
-                        "input": tool_input,
+                        "name": tc.get("name"),
+                        "input": str(tc.get("args", "")),
                         "status": "success",
                         "output": ""
                     }
@@ -190,72 +241,23 @@ class UltronBrain:
     def _extract_raw_query(self, content: list) -> str:
         """Extracts text from message content list."""
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                return item["text"]
-            if hasattr(item, "text"):
-                return item.text
+            if isinstance(item, dict) and item.get("type") == "text": return item["text"]
+            if hasattr(item, "text"): return item.text
         return str(content)
     
-    def _get_base_tool_set(self):
-        """Get base tools that are always available"""
-        base_tools = tool_manager.get_base_tools()
-        base_tools.append(self.long_term_memory.get_tool())
-        base_tools.append(skill_index.get_retrieve_tool())
-        return base_tools
-    
-    def _get_tool_signature(self, tools):
-        """Generate signature for tool set"""
-        return hash(tuple(sorted(t.name for t in tools)))
-    
-    def _get_cached_system_prompt(self) -> str:
+    def _get_cached_system_prompt(self, is_master: bool = True, user_name: str = "User") -> str:
         """
         Build optimized system prompt dynamically based on context.
-        Only includes relevant sections to reduce token usage.
+        Master prompt is cached after first build; guest prompt is not cached (varies by user_name).
         """
-        has_skills = len(self._current_skills) > 0
-        skills_summary = skill_index.get_all_skills_summary() if has_skills else ""
-        
-        # Build optimized prompt (30-40% fewer tokens than before)
-        prompt = build_system_prompt(
-            has_skills=has_skills,
-            has_memory=True,  # Memory tools always available
-            extended=False,  # Only use extended for complex scenarios
-            skills_summary=skills_summary
-        )
-        
-        logger.debug(f"Built prompt with {len(prompt.split())} words (skills: {has_skills})")
-        return prompt
-    
-    def _should_reload_skills(self, reply_text: str) -> bool:
-        """Check if agent requested skill reload"""
-        return "RELOAD_AGENT:" in reply_text
-    
-    def _extract_skills_from_response(self, reply_text: str) -> list:
-        """Extract skill names from RELOAD_AGENT marker"""
-        try:
-            marker = "RELOAD_AGENT:"
-            if marker in reply_text:
-                skills_str = reply_text.split(marker)[1].split()[0]  # Get first word after marker
-                skills = [s.strip() for s in skills_str.split(",")]
-                return skills
-        except Exception as e:
-            logger.error(f"Failed to extract skills from response: {e}")
-        return []
-    
-    def _rebuild_agent_with_skills(self, new_skills: list):
-        """Rebuild agent with additional skills"""
-        self._current_skills.update(new_skills)
-        
-        # Build complete tool set
-        base_tools = self._get_base_tool_set()
-        skill_tools = tool_manager.get_tools_for_skills(list(self._current_skills))
-        all_tools = base_tools + skill_tools
-        
-        # Rebuild agent
-        self.brain_manager = BrainAgent(self.model, all_tools)
-        self._last_tool_signature = self._get_tool_signature(all_tools)
-        
-        # Invalidate prompt cache (prompt will be rebuilt with new skills)
-        self._cached_prompt = None
-        
-        logger.info(f"Agent rebuilt with {len(all_tools)} tools (skills: {self._current_skills})")
+        if not is_master:
+            from core.chat_prompt import Email_Replier_Prompt
+            return f"The current user is: {user_name}.\n\n" + Email_Replier_Prompt
+
+        if "master" not in self._cached_prompt:
+            self._cached_prompt["master"] = build_system_prompt(
+                has_skills=True,  # Always include skill protocol to enforce discovery
+                has_memory=True,
+                extended=True
+            )
+        return self._cached_prompt["master"]

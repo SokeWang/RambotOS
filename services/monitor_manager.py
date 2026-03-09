@@ -29,8 +29,7 @@ class NotificationBridge(QThread):
                         self.notificationReceived.emit(n["message"])
                         self.last_sync = max(self.last_sync, n.get("timestamp", 0))
             except Exception as e:
-                # Silently ignore connection errors (core might be down)
-                pass
+                logger.debug(f"NotificationBridge: poll failed: {e}")
             
             time.sleep(2) # Poll every 2 seconds
 
@@ -73,20 +72,34 @@ class MonitorManager(QObject):
                     if self.statuses.get(name) != is_running:
                         self.statuses[name] = is_running
                         self.statusChanged.emit(name, is_running)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"MonitorManager: sync failed: {e}")
+
+    def _discover_scripts(self):
+        """Scans the current directory for standalone_*.py scripts."""
+        scripts = {}
+        for f in os.listdir(os.getcwd()):
+            if f.startswith("standalone_") and f.endswith(".py"):
+                # Exception for the base monitor if any
+                if f == "standalone_monitor.py":
+                    name = "email"
+                else:
+                    name = f.replace("standalone_", "").replace(".py", "")
+                scripts[name] = f
+        return scripts
 
     def start_monitor(self, name):
         """Spawn the standalone monitor process."""
-        if name == "email":
-            script_path = os.path.join(os.getcwd(), "standalone_monitor.py")
+        scripts = self._discover_scripts()
+        if name in scripts:
+            script_path = os.path.join(os.getcwd(), scripts[name])
+            
             if name in self.processes and self.processes[name].poll() is None:
                 logger.info(f"MonitorManager: {name} already has a managed process running.")
                 return True
                 
-            logger.info(f"MonitorManager: Spawning standalone {name} monitor...")
+            logger.info(f"MonitorManager: Spawning standalone {name} monitor ({scripts[name]})...")
             try:
-                # Use sys.executable to ensure we use the same python environment
                 import sys
                 proc = subprocess.Popen([sys.executable, script_path], 
                                      stdout=subprocess.DEVNULL, 
@@ -96,6 +109,8 @@ class MonitorManager(QObject):
             except Exception as e:
                 logger.error(f"MonitorManager: Failed to spawn {name}: {e}")
                 return False
+        
+        logger.warning(f"MonitorManager: No script found for monitor '{name}'. Available: {list(scripts.keys())}")
         return False
 
     def stop_monitor(self, name):
@@ -115,8 +130,8 @@ class MonitorManager(QObject):
             # Notify Core immediately
             try:
                 requests.post(f"{CORE_URL}/monitor/unregister/{name}", timeout=1)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"MonitorManager: unregister notify failed: {e}")
                 
             return True
         

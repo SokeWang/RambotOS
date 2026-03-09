@@ -1,7 +1,8 @@
 """
-并发控制管理器
+并发控制管理器（当前未被项目引用，保留以备后用）
 
-提供线程池和请求队列管理,防止资源耗尽。
+提供线程池和请求队列管理，防止资源耗尽。
+注意：request_queue 字段已声明但当前未使用。
 """
 
 from concurrent.futures import ThreadPoolExecutor, Future

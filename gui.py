@@ -19,6 +19,7 @@ from services.wakeword import WakeWordThread
 from services.monitor_manager import monitor_manager
 from utils.exceptions import ErrorHandler, MediaProcessingError, ASRError
 from utils.concurrency import get_concurrency_manager
+import requests
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite"
 from PySide6.QtCore import Qt
@@ -41,9 +42,18 @@ def run_gui():
     # Configure Logger for less verbosity
     logger.configure(handlers=[{"sink": sys.stderr, "level": "INFO"}])
     
-    # Initialize Agent
-    agent_instance = Ultron()
-    logger.info("Backend Agent initialized successfully.")
+    # Initialize Agent (Proxy for Gateway)
+    # We still need mouth and ear for local ASR/TTS
+    from services.asr import ASRFactory
+    from services.tts import TTSFactory
+    
+    class RambotClient:
+        def __init__(self):
+            self.ear = ASRFactory.get_asr_engine()
+            self.mouth = TTSFactory.get_tts_engine("edge", voice="zh-CN-XiaoxiaoNeural")
+            
+    agent_instance = RambotClient()
+    logger.info("Backend Client initialized successfully (Gateway Mode).")
 
     class BackendBridge(QObject):
         chatResponse = Signal(str)
@@ -193,35 +203,55 @@ def run_gui():
             # Passing message to agent_instance.run is enough.
 
             t_start = time.time()
-            # Call agent with new arguments
-            async def run_sequence():
-                audio_emitted = False
-                async for response_payload in agent_instance.run(
-                    message=message,
-                    speech=None, # Already transcribed
-                    attachment_base64=attachment_b64,
-                    webcam_base64=camera_image
-                ):
-                    audio_response = response_payload.get("audio")
-                    brain_response = response_payload.get("text")
+            # Call Gateway API
+            def run_central_chat():
+                try:
+                    payload = {
+                        "message": message,
+                        "sender": "os_user",
+                        "attachment_base64": attachment_b64,
+                        "webcam_base64": camera_image
+                    }
                     
-                    if brain_response:
-                        if isinstance(brain_response, dict):
-                            reply_text = brain_response.get("reply", "")
+                    final_reply = ""
+                    with requests.post("http://127.0.0.1:8000/chat", json=payload, timeout=None, stream=True) as resp:
+                        if resp.status_code == 200:
+                            for line in resp.iter_lines():
+                                if line:
+                                    try:
+                                        brain_response = json.loads(line)
+                                        reply_text = brain_response.get("reply", "")
+                                        final_reply = reply_text # Update continuously, last one wins
+                                        
+                                        frontend_payload = {
+                                            "text": reply_text,
+                                            "tool_calls": brain_response.get("tool_calls", []),
+                                            "webcam_needed": webcam_needed,
+                                            "gen_ui": brain_response.get("gen_ui")
+                                        }
+                                        if brain_response.get("gen_ui"):
+                                            logger.info(f"GUI: Emitting gen_ui to frontend. Length: {len(brain_response.get('gen_ui'))}")
+                                        self.chatResponse.emit(json.dumps(frontend_payload))
+                                    except Exception as je:
+                                        logger.error(f"Error parsing stream line: {je}")
+                            
+                            # Generate and emit audio locally using the final accumulated reply
+                            if final_reply:
+                                async def play_audio():
+                                    try:
+                                        audio_b64 = await agent_instance.mouth.generate_base64_audio(final_reply)
+                                        self.audioGenerated.emit(audio_b64)
+                                    except Exception as ae:
+                                        logger.error(f"TTS Error: {ae}")
+                                asyncio.run(play_audio())
                         else:
-                            reply_text = str(brain_response)
+                            logger.error(f"Gateway Error: {resp.status_code}")
+                            self.chatResponse.emit(json.dumps({"text": "Gateway connection error."}))
+                except Exception as e:
+                    logger.error(f"Gateway Chat Failed: {e}")
+                    self.chatResponse.emit(json.dumps({"text": f"Error: {e}"}))
 
-                        frontend_payload = {
-                            "text": reply_text,
-                            "tool_calls": brain_response.get("tool_calls", []) if isinstance(brain_response, dict) else [],
-                            "webcam_needed": webcam_needed  # Tell frontend if camera image should be shown
-                        }
-                        self.chatResponse.emit(json.dumps(frontend_payload))
-                    
-                    if audio_response:
-                        self.audioGenerated.emit(audio_response)
-
-            asyncio.run(run_sequence())
+            run_central_chat()
             t_end = time.time()
             logger.debug(f"[Performance] Total Agent Execution took {t_end - t_start:.2f}s")
             
@@ -267,16 +297,26 @@ def run_gui():
 
         historyLoaded = Signal(str)
 
+        @Slot(int)
         @Slot()
-        def requestHistory(self):
+        def requestHistory(self, offset=0):
             if not agent_instance:
                 logger.debug("Agent not ready, cannot get history.")
                 return
 
-            logger.debug("Fetching chat history...")
+            logger.debug(f"Fetching chat history via Gateway (Offset: {offset})...")
 
-            import json
-            messages = agent_instance.brain.short_memory_manager.get(limit=20, with_time=True)
+            try:
+                resp = requests.get("http://127.0.0.1:8000/history", params={"limit": 20, "offset": offset}, timeout=None)
+                if resp.status_code == 200:
+                    messages = resp.json()
+                else:
+                    logger.error(f"Failed to fetch history: {resp.status_code}")
+                    return
+            except Exception as e:
+                logger.error(f"History Gateway error: {e}")
+                return
+
             formatted_history = []
             
             for msg in messages:
@@ -325,9 +365,12 @@ def run_gui():
                     "tool_calls": tool_calls if msg["role"] == "ai" else [],
                     "time": msg["time"]
                 })
-            json_history = json.dumps(formatted_history)
+            json_history = json.dumps({
+                "messages": formatted_history,
+                "offset": offset
+            })
             self.historyLoaded.emit(json_history)
-            logger.debug(f"Sent {len(formatted_history)} historical messages to frontend.")
+            logger.debug(f"Sent {len(formatted_history)} historical messages to frontend (Offset: {offset}).")
 
         @Slot()
         def _on_wake_word_detected(self):
@@ -433,19 +476,21 @@ def run_gui():
         @Slot(result=str)
         def get_long_term_memory(self):
             try:
-                memories = agent_instance.brain.long_term_memory.get_all_memories()
-                return json.dumps(memories)
+                resp = requests.get("http://127.0.0.1:8000/memory", timeout=5)
+                if resp.status_code == 200:
+                    return json.dumps(resp.json())
+                return json.dumps([])
             except Exception as e:
-                logger.error(f"Error fetching memories: {e}")
+                logger.error(f"Error fetching memories via Gateway: {e}")
                 return json.dumps([])
 
         @Slot(str, result=bool)
         def delete_memory(self, memory_id):
             try:
-                agent_instance.brain.long_term_memory.collection.delete(ids=[memory_id])
-                return True
+                resp = requests.delete(f"http://127.0.0.1:8000/memory/{memory_id}", timeout=5)
+                return resp.status_code == 200
             except Exception as e:
-                logger.error(f"Error deleting memory: {e}")
+                logger.error(f"Error deleting memory via Gateway: {e}")
                 return False
 
         # --- Monitor/Heartbeat Control ---
@@ -464,6 +509,89 @@ def run_gui():
             """Returns a JSON string of all monitor statuses."""
             import json
             return json.dumps(monitor_manager.get_all_statuses())
+
+        @Slot(str, result=bool)
+        def bind_user(self, email):
+            """Binds the master user to an email address via Gateway."""
+            try:
+                resp = requests.post("http://127.0.0.1:8000/user/bind", json={"email": email}, timeout=5)
+                return resp.status_code == 200
+            except Exception as e:
+                logger.error(f"Failed to bind user via Gateway: {e}")
+                return False
+
+        @Slot(str, result=bool)
+        def bind_telegram_id(self, chat_id):
+            """Binds the master user to a Telegram Chat ID via Gateway."""
+            try:
+                resp = requests.post("http://127.0.0.1:8000/user/bind", json={"telegram_chat_id": chat_id}, timeout=5)
+                return resp.status_code == 200
+            except Exception as e:
+                logger.error(f"Failed to bind telegram id via Gateway: {e}")
+                return False
+
+        @Slot(result=str)
+        def get_sessions(self):
+            """Returns a JSON string of all unified sessions."""
+            try:
+                resp = requests.get("http://127.0.0.1:8000/session/list", timeout=5)
+                if resp.status_code == 200:
+                    return json.dumps(resp.json())
+            except Exception as e:
+                logger.error(f"Failed to fetch sessions: {e}")
+            return "[]"
+
+        @Slot(str, str, result=bool)
+        def link_session(self, session_id, identifier):
+            """Links an identifier to an existing session via Gateway."""
+            try:
+                resp = requests.post(
+                    f"http://127.0.0.1:8000/session/link?session_id={session_id}&identifier={identifier}", 
+                    timeout=5
+                )
+                return resp.status_code == 200
+            except Exception as e:
+                logger.error(f"Failed to link session {session_id}: {e}")
+                return False
+
+        @Slot(result=str)
+        def get_guests(self):
+            """Returns a JSON string of all guest profiles."""
+            try:
+                resp = requests.get("http://127.0.0.1:8000/user/guests", timeout=5)
+                if resp.status_code == 200:
+                    return json.dumps(resp.json())
+            except Exception as e:
+                logger.error(f"Failed to fetch guests: {e}")
+            return "[]"
+
+        @Slot(str, str, str, result=bool)
+        def update_guest(self, user_id, name, email_or_tg):
+            """Updates or creates a guest profile."""
+            payload = {"user_id": user_id, "name": name}
+            if email_or_tg.startswith("telegram_"):
+                payload["telegram_chat_id"] = email_or_tg.replace("telegram_", "")
+            else:
+                payload["email"] = email_or_tg
+
+            try:
+                resp = requests.post("http://127.0.0.1:8000/user/bind", json=payload, timeout=5)
+                return resp.status_code == 200
+            except Exception as e:
+                logger.error(f"Failed to update guest {user_id}: {e}")
+                return False
+
+        @Slot(result=str)
+        def get_user_profile(self):
+            """Fetches the current user profile from Gateway."""
+            try:
+                resp = requests.get("http://127.0.0.1:8000/user/profile", timeout=5)
+                if resp.status_code == 200:
+                    return json.dumps(resp.json())
+                return json.dumps({"email": ""})
+            except Exception as e:
+                logger.error(f"Failed to fetch profile via Gateway: {e}")
+                return json.dumps({"email": ""})
 
         # --- Gesture Control ---
         @Slot(float, float)
@@ -537,8 +665,8 @@ def run_gui():
             super().__init__(profile, parent)
 
         def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-            # Suppress messages to reduce verbosity as requested.
-            pass
+            # Log JS console messages to terminal for debugging
+            logger.info(f"FRONTEND [L:{lineNumber}@{sourceID}]: {message}")
 
     # Configure Persistent Storage for LocalStorage/Settings
     storage_path = os.path.abspath(os.path.expanduser("~/.rambot/web_storage"))
@@ -592,11 +720,12 @@ def run_gui():
     
     # Connect Agent UI Callback
     if agent_instance:
-        # 1. Background Initialization
-        logger.info("Triggering Background Agent Initialization...")
+        # 1. Background Initialization (Now just for UI ready signal)
+        logger.info("Triggering UI Ready Notification...")
         def run_init():
-            asyncio.run(agent_instance.initialize())
-            backend_bridge.initialized.emit() # Signal frontend that loading is finished
+            # In Gateway mode, we don't need to initialize brain here
+            # But we signal frontend that we are ready
+            backend_bridge.initialized.emit() 
             
             # Connect the Service-Oriented MonitorManager to the HUD
             logger.info("Connecting Service-Oriented MonitorManager...")
@@ -677,4 +806,3 @@ def run_gui():
 
 if __name__ == "__main__":
     sys.exit(run_gui())
-```

@@ -21,7 +21,7 @@ When the user asks to "monitor my email" or "check if the heartbeats are running
    - `action='status'`: To get details of a specific service.
 
 ## Currently Supported Services
-- `email`: Scans 163 Mail for replies to Rambot-initiated threads and auto-replies using the Brain's intelligence.
+- `email`: Scans for replies to Rambot-initiated threads and auto-replies using the Brain's intelligence.
 
 > [!TIP]
 > You can ask: "Rambot, 开启邮件心跳监测" or "现在有哪些监控在运行？"

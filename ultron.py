@@ -1,4 +1,4 @@
-from agents.langchain_agent import UltronBrain
+from agents.langchain_agent import LangchainBrain
 from services.tts import TTSFactory
 import asyncio
 from services.asr import ASRFactory
@@ -8,7 +8,7 @@ from utils.exceptions import ASRError
 class Ultron:
     def __init__(self):
         self.ear = ASRFactory.get_asr_engine()
-        self.brain = UltronBrain()
+        self.brain = LangchainBrain()
         self.mouth = TTSFactory.get_tts_engine("edge", voice="en-GB-SoniaNeural")
 
     async def initialize(self):

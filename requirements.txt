@@ -10,8 +10,13 @@ openai
 langgraph-checkpoint-mongodb
 loguru
 langchain_google_genai
+langchain_google-genai
 numpy
 pyautogui
 faster-whisper
 fastapi
 uvicorn
+python-telegram-bot
+motor
+agentmail
+ddgs

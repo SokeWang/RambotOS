@@ -1,0 +1,19 @@
+[project]
+name = "yolo26_person_id"
+version = "0.1.0"
+description = "Real-time person identification and tracking using YOLO26 and InsightFace"
+authors = [{ name = "RAMBOT", email = "rambot@example.com" }]
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "ultralytics>=8.3.64",
+    "insightface",
+    "opencv-python",
+    "onnxruntime-silicon",
+    "numpy<2",
+    "lapx",
+    "torch",
+    "torchvision"
+]
+
+[tool.uv]
+managed = true

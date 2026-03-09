@@ -6,7 +6,7 @@ import signal
 import requests
 from loguru import logger
 from config.config import CFG
-from agents.langchain_agent import UltronBrain
+from agents.langchain_agent import LangchainBrain
 from services.email_service import EmailService
 
 # Configuration
@@ -42,7 +42,11 @@ class StandaloneMonitor:
             resp = requests.post(f"{CORE_URL}/monitor/register", json={
                 "name": MONITOR_NAME,
                 "pid": os.getpid(),
-                "interval": self.interval
+                "interval": self.interval,
+                "label": "Email Heartbeat Monitoring",
+                "sublabel": "Email Monitoring",
+                "icon": "Mail",
+                "color": "blue"
             })
             if resp.status_code == 200:
                 logger.info("Monitor: Registered with Rambot Core.")
@@ -71,12 +75,9 @@ class StandaloneMonitor:
         logger.info(f"Starting standalone Email Monitor (PID: {os.getpid()})")
         self.create_pid_file()
         
-        # Initialize Brain & Service
-        self.brain = UltronBrain()
-        await self.brain.initialize()
-        
+        # In Gateway Mode, the service will relay to Core
         self.email_service = EmailService(
-            self.brain,
+            brain=None, # Not used in gateway mode
             notification_callback=self.send_notification
         )
         
