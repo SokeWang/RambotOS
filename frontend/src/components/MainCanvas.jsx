@@ -3,23 +3,28 @@ import { useUI } from '../context/UIContext';
 import { MessageSquare, Calendar, Database, Activity, Shield, BarChart2 } from 'lucide-react';
 
 export default function MainCanvas() {
-    const { setShowChatbox, setActiveApp } = useUI();
+    const { setShowChatbox, setActiveApp, activeApp, showAppLauncher, setShowAppLauncher, genUIEnabled } = useUI();
 
     const apps = [
-        { id: 'chat', name: 'Chatbox', icon: <MessageSquare size={36} />, color: 'from-blue-400 to-blue-600', action: () => setShowChatbox(true) },
+        { id: 'chat', name: 'Chatbox', icon: <MessageSquare size={36} />, color: 'from-blue-400 to-blue-600', action: () => { setShowChatbox(true); setShowAppLauncher(false); } },
         { id: 'calendar', name: 'Timeline', icon: <Calendar size={36} />, color: 'from-purple-400 to-purple-600' },
-        { id: 'data', name: 'Knowledge', icon: <Database size={36} />, color: 'from-cyan-400 to-cyan-600', action: () => setActiveApp({ name: 'Knowledge', id: 'Knowledge' }) },
-        { id: 'skills', name: 'Skills', icon: <Activity size={36} />, color: 'from-orange-400 to-orange-600', action: () => { console.log("Opening Skills..."); setActiveApp({ name: 'Skills', id: 'Skills' }); } },
-        { id: 'security', name: 'Heartbeat', icon: <Activity size={36} />, color: 'from-red-400 to-red-600', action: () => setActiveApp({ name: 'Heartbeat', id: 'security' }) },
-        { id: 'charts', name: 'Analytics', icon: <BarChart2 size={36} />, color: 'from-green-400 to-green-600' },
+        { id: 'data', name: 'Knowledge', icon: <Database size={36} />, color: 'from-cyan-400 to-cyan-600', action: () => { setActiveApp({ name: 'Knowledge', id: 'Knowledge' }); setShowAppLauncher(false); } },
+        { id: 'skills', name: 'Skills', icon: <Activity size={36} />, color: 'from-orange-400 to-orange-600', action: () => { console.log("Opening Skills..."); setActiveApp({ name: 'Skills', id: 'Skills' }); setShowAppLauncher(false); } },
+        { id: 'security', name: 'Heartbeat', icon: <Activity size={36} />, color: 'from-red-400 to-red-600', action: () => { setActiveApp({ name: 'Heartbeat', id: 'security' }); setShowAppLauncher(false); } },
+        { id: 'genui', name: 'GenUI', icon: <Shield size={36} />, color: 'from-green-400 to-green-600', action: () => { setActiveApp({ name: 'GenUI', id: 'genui' }); setShowAppLauncher(false); } },
     ];
+
+    const filteredApps = apps.filter(app => {
+        if (app.id === 'genui') return genUIEnabled;
+        return true;
+    });
 
     return (
         <div className="relative w-full h-full flex flex-col justify-center items-center pointer-events-none">
 
             {/* 1. App Grid (VisionOS style) */}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-x-20 gap-y-16 animate-in fade-in zoom-in duration-1000">
-                {apps.map((app) => (
+                {filteredApps.map((app) => (
                     <button
                         key={app.id}
                         data-gaze-target="true"
@@ -27,7 +32,7 @@ export default function MainCanvas() {
                             e.stopPropagation();
                             if (app.action) app.action();
                         }}
-                        className="group flex flex-col items-center gap-6 transition-all duration-300 hover:scale-110 pointer-events-auto"
+                        className={`group flex flex-col items-center gap-6 transition-all duration-300 hover:scale-110 ${(!activeApp && showAppLauncher) ? 'pointer-events-auto' : 'pointer-events-none'}`}
                     >
                         <div className={`
                                 w-24 h-24 md:w-28 md:h-28 rounded-[2.8rem] bg-gradient-to-br ${app.color} 

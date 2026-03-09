@@ -42,14 +42,13 @@ const Modal = React.memo(({
 
     return (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xl"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
             onClick={handleBackdropClick}
         >
             <div
                 className={`
                     bg-black/40 border border-white/10
-                    rounded-[2rem] p-8
-                    backdrop-blur-3xl shadow-2xl
+                    rounded-[2rem] p-8 shadow-2xl
                     max-w-2xl w-full mx-4
                     animate-fade-in
                     ${className}

@@ -35,7 +35,9 @@ const AppContent = () => {
         isSystemReady
     } = useGlobal();
 
-    const { showCameraBackground, wallpaper } = useUI();
+    const { showCameraBackground, wallpaper, activeApp } = useUI();
+
+    const isAnyAppOpen = !!activeApp || showChatbox;
 
     // Prevent programmatic or focus-triggered scrolling
     useEffect(() => {
@@ -57,7 +59,9 @@ const AppContent = () => {
             <canvas ref={canvasRef} style={{ width: '640px', height: '480px', display: 'none', position: 'absolute', pointerEvents: 'none' }}></canvas>
 
             {/* 1. Vision Background (Spatial Video) - Global Background */}
-            <div className={`absolute inset-0 z-0 transition-[opacity,transform,filter] duration-700 ease-in-out scale-100 blur-none opacity-100 ${!showCameraBackground ? 'opacity-0 scale-95' : 'opacity-100'}`}>
+            <div className={`absolute inset-0 z-0 transition-[opacity,transform,filter] duration-700 ease-in-out scale-100 opacity-100 
+                ${!showCameraBackground ? 'opacity-0 scale-95' : 'opacity-100'}
+                ${isAnyAppOpen ? 'blur-md scale-105 brightness-[0.8]' : 'blur-none'}`}>
                 <video
                     ref={captureRef}
                     className="w-full h-full object-cover scale-x-[-1]"
@@ -69,7 +73,9 @@ const AppContent = () => {
             </div>
 
             {/* 1.5 Gradient / Custom Wallpaper Background (Shown when camera is off) */}
-            <div className={`absolute inset-0 z-0 transition-[opacity,transform] duration-1000 ease-in-out bg-gradient-to-br from-[#0c0c14] via-[#1a1a2e] to-[#0c0c14] ${showCameraBackground ? 'opacity-0 scale-105' : 'opacity-100 scale-100'}`}>
+            <div className={`absolute inset-0 z-0 transition-[opacity,transform,filter] duration-1000 ease-in-out bg-gradient-to-br from-[#0c0c14] via-[#1a1a2e] to-[#0c0c14] 
+                ${showCameraBackground ? 'opacity-0 scale-105' : 'opacity-100 scale-100'} 
+                ${isAnyAppOpen && !showCameraBackground ? 'blur-md scale-105 brightness-[0.8]' : ''}`}>
                 {wallpaper ? (
                     <img
                         src={wallpaper}
@@ -92,8 +98,8 @@ const AppContent = () => {
                 {/* Subtitle Overlay (VisionOS style) */}
                 {!showChatbox && subtitle && (
                     <div className={`absolute bottom-32 left-0 w-full flex justify-center pointer-events-none z-50 ${isSubtitleFading ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'} transition-[opacity,transform] duration-500`}>
-                        <div className="max-w-3xl px-8 py-4 bg-black/40 backdrop-blur-3xl rounded-[2rem] border border-white/10 shadow-2xl">
-                            <p className="text-white text-lg md:text-xl font-bold text-center leading-relaxed tracking-wide">
+                        <div className="max-w-3xl px-8 py-4">
+                            <p className="text-white text-lg md:text-[22px] font-bold text-center leading-relaxed tracking-wide drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]" style={{ textShadow: '0 2px 10px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.5)' }}>
                                 {subtitle}
                             </p>
                         </div>

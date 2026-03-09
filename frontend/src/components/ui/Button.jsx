@@ -41,7 +41,6 @@ const Button = React.memo(({
                 rounded-2xl font-medium
                 transition-all duration-200
                 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none
-                backdrop-blur-md
                 ${className}
             `}
             onClick={onClick}

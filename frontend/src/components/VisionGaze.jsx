@@ -9,29 +9,33 @@ const VisionGaze = ({ mousePos, isPinching }) => {
         <div className="pointer-events-none fixed inset-0 z-[100]">
             {/* 1. Spatial Pointer (The "Dot") - Enhanced */}
             <div
-                className="absolute transition-transform duration-150 ease-out"
+                className="absolute transition-transform duration-150 ease-out flex items-center justify-center"
                 style={{
-                    left: mousePos.x,
-                    top: mousePos.y,
-                    transform: `translate(-50%, -50%) scale(${isPinching ? 0.7 : 1})`
+                    left: Math.round(mousePos.x),
+                    top: Math.round(mousePos.y),
+                    transform: `translate(-50%, -50%) scale(${isPinching ? 0.7 : 1})`,
+                    willChange: 'transform, left, top'
                 }}
             >
-                {/* Core dot */}
+                {/* Core dot - perfectly centered based on parent's translate -50% -50% */}
                 <div className="w-2.5 h-2.5 bg-white rounded-full shadow-[0_0_15px_white]" />
 
                 {/* Large blur halo - 400px radial gradient */}
                 <div
-                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-white/[0.04] rounded-full blur-3xl"
+                    className="absolute w-[400px] h-[400px] bg-white/[0.04] rounded-full blur-3xl pointer-events-none"
                     style={{ opacity: isPinching ? 0.3 : 0.6 }}
                 />
             </div>
 
             {/* 2. Secondary Gaze Feedback Layer */}
             <div
-                className="absolute w-[500px] h-[500px] rounded-full transition-opacity duration-300"
+                className="absolute rounded-full transition-opacity duration-300 pointer-events-none"
                 style={{
-                    left: mousePos.x - 250,
-                    top: mousePos.y - 250,
+                    width: '500px',
+                    height: '500px',
+                    left: Math.round(mousePos.x),
+                    top: Math.round(mousePos.y),
+                    transform: 'translate(-50%, -50%)',
                     background: 'radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)',
                     opacity: isPinching ? 0.2 : 0.4
                 }}

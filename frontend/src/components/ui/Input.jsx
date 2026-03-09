@@ -44,7 +44,6 @@ const Input = React.memo(({
                 transition-all duration-200
                 focus:border-white/30 focus:bg-white/10
                 disabled:opacity-50 disabled:cursor-not-allowed
-                backdrop-blur-md
                 ${className}
             `}
             {...props}

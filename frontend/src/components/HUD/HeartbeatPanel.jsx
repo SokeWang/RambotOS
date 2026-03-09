@@ -41,23 +41,17 @@ export default function HeartbeatPanel() {
         }
     };
 
-    const monitorConfigs = {
-        'email': {
-            label: 'Email Heartbeat Monitoring',
-            sublabel: 'Email Monitoring (163 Mail)',
-            icon: <Mail className="w-6 h-6 text-blue-400" />,
-            color: 'blue'
-        },
-        'whatsapp': {
-            label: 'WhatsApp Message Monitoring',
-            sublabel: 'WhatsApp Monitoring (Web)',
-            icon: <MessageCircle className="w-6 h-6 text-green-400" />,
-            color: 'green'
-        }
+    const getIcon = (iconName) => {
+        const icons = {
+            'Mail': <Mail className="w-6 h-6 text-blue-400" />,
+            'MessageCircle': <MessageCircle className="w-6 h-6 text-green-400" />,
+            'Activity': <Activity className="w-6 h-6 text-orange-400" />
+        };
+        return icons[iconName] || <Activity className="w-6 h-6 text-white" />;
     };
 
     return (
-        <div className="flex flex-col h-full text-white font-sans overflow-hidden bg-black/20 backdrop-blur-xl">
+        <div className="flex flex-col h-full text-white font-sans overflow-hidden bg-black/20">
             {/* Header */}
             <div className="flex items-center justify-between p-8 border-b border-white/10">
                 <div className="flex items-center space-x-4">
@@ -81,9 +75,16 @@ export default function HeartbeatPanel() {
             {/* Monitors Grid */}
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {Object.keys(monitorConfigs).map((name) => {
-                        const isRunning = statuses[name] || false;
-                        const config = monitorConfigs[name];
+                    {Object.keys(statuses).map((name) => {
+                        const monitor = statuses[name];
+                        // Backend returns objects now, but we check for structure
+                        const isRunning = (typeof monitor === 'object') ? monitor.status === 'running' : monitor;
+
+                        // Use metadata from backend or fallbacks
+                        const label = monitor.label || name.charAt(0).toUpperCase() + name.slice(1);
+                        const sublabel = monitor.sublabel || `${name.toUpperCase()} Service Monitoring`;
+                        const icon = getIcon(monitor.icon);
+                        const color = monitor.color || 'blue';
 
                         return (
                             <div
@@ -96,8 +97,8 @@ export default function HeartbeatPanel() {
                                     `}
                             >
                                 <div className="flex justify-between items-start mb-6">
-                                    <div className={`p-4 rounded-2xl bg-${config.color}-500/10`}>
-                                        {config.icon}
+                                    <div className={`p-4 rounded-2xl bg-${color}-500/10`}>
+                                        {icon}
                                     </div>
                                     <div className={`
                                             flex items-center space-x-2 px-3 py-1 rounded-full border text-[10px] font-bold uppercase tracking-widest
@@ -109,8 +110,8 @@ export default function HeartbeatPanel() {
                                 </div>
 
                                 <div className="space-y-1">
-                                    <h3 className="text-lg font-bold text-white/90">{config.label}</h3>
-                                    <p className="text-xs text-white/40 font-mono tracking-wider">{config.sublabel}</p>
+                                    <h3 className="text-lg font-bold text-white/90">{label}</h3>
+                                    <p className="text-xs text-white/40 font-mono tracking-wider">{sublabel}</p>
                                 </div>
 
                                 <div className="mt-8 flex justify-between items-center">

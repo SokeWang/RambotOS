@@ -21,7 +21,9 @@ export const RambotProvider = ({ children }) => {
         windowMode, setWindowMode,
         isSystemReady, setIsSystemReady,
         showCameraBackground,
-        addLog: uiAddLog
+        addLog: uiAddLog,
+        setActiveApp,
+        setShowAppLauncher
     } = useUI();
 
     // --- Logic State ---
@@ -44,11 +46,8 @@ export const RambotProvider = ({ children }) => {
         return [];
     });
     const [attachment, setAttachment] = useState(null);
-
-    // Save history to localStorage
-    useEffect(() => {
-        localStorage.setItem('rambot_chat_history', JSON.stringify(chatHistory));
-    }, [chatHistory]);
+    const [historyOffset, setHistoryOffset] = useState(0);
+    const [hasMoreHistory, setHasMoreHistory] = useState(true);
     const [isVoiceInteraction, setIsVoiceInteraction] = useState(false);
     const subtitleTimeoutRef = useRef(null);
 
@@ -64,7 +63,6 @@ export const RambotProvider = ({ children }) => {
     const setIsListeningRef = useRef(null);
     const startRecordingRef = useRef(null);
 
-
     const onTTSFinished = useCallback(() => {
         if (isVoiceInteraction) {
             console.log("TTS Finished, starting continuous listening...");
@@ -79,11 +77,23 @@ export const RambotProvider = ({ children }) => {
         setSubtitle,
         setIsSubtitleFading,
         subtitleTimeoutRef,
-        null, // No UI Response handler anymore
         onTTSFinished,
         setAttachment,
-        setNotification
+        setNotification,
+        setHasMoreHistory
     );
+
+    const loadMoreHistory = useCallback(() => {
+        if (!hasMoreHistory || !backendProps.backend || !backendProps.backend.requestHistory) return;
+        const newOffset = historyOffset + 20;
+        setHistoryOffset(newOffset);
+        backendProps.backend.requestHistory(newOffset);
+    }, [hasMoreHistory, historyOffset, backendProps.backend]);
+
+    // Save history to localStorage
+    useEffect(() => {
+        localStorage.setItem('rambot_chat_history', JSON.stringify(chatHistory));
+    }, [chatHistory]);
 
     const handleVoiceProcess = useCallback((base64Audio, capturedImage) => {
         setIsVoiceInteraction(true);
@@ -104,23 +114,28 @@ export const RambotProvider = ({ children }) => {
         startRecordingRef.current = startRecording;
     }, [setIsListening, startRecording]);
 
-
-
     // --- Business Logic Handlers ---
     const triggerSystemAction = useCallback((action) => {
-
-        if (action === 'Chatbox') {
+        if (action === 'Chatbox' || action === 'TOGGLE_CHAT') {
             setShowChatbox(prev => {
                 const newState = !prev;
                 addLog('system', newState ? 'Starting communication module' : 'Closing communication module');
-                // backendProps.speak(newState ? 'Encrypted communication channel established' : 'Communication ended');
+                if (newState && backendProps.backend && backendProps.backend.requestHistory) {
+                    backendProps.backend.requestHistory(0);
+                }
                 return newState;
             });
+        } else if (action === 'Settings') {
+            setActiveApp({ name: 'System Settings', id: 'Settings' });
+            addLog('system', 'Opening System Settings');
+        } else if (action === 'TOGGLE_LAUNCHER') {
+            setShowAppLauncher(prev => !prev);
+            addLog('system', 'Toggling App Launcher');
         } else {
-            // backendProps.speak(`${action} command activated`);
-            addLog('system', `Manual action: ${action}`);
+            setActiveApp({ name: action, id: action });
+            addLog('system', `Launching App: ${action}`);
         }
-    }, [setShowChatbox, setShowLogs, addLog, backendProps]);
+    }, [setShowChatbox, setActiveApp, setShowAppLauncher, addLog, backendProps]);
 
     const toggleWindowMode = useCallback(() => {
         const newMode = windowMode === 'full' ? 'mini' : 'full';
@@ -257,22 +272,36 @@ export const RambotProvider = ({ children }) => {
         }
     }, [backendProps.backend, startRecording, addLog, triggerSystemAction]);
 
+    // Destructure extra stable fields not yet destructured above
+    const { stream, captureRef, canvasRef, availableCameras, selectedCameraId,
+        setSelectedCameraId, showCameraSelector, setShowCameraSelector } = cameraProps;
+    const { isListening, toggleListening } = audioProps;
+    const { backend, sendMessage, processAudio, selectFile } = backendProps;
+
     const value = useMemo(() => ({
         logs, addLog,
+        historyOffset, setHistoryOffset,
+        hasMoreHistory, loadMoreHistory,
         chatHistory, setChatHistory,
         attachment, setAttachment,
-        triggerSelectFile: backendProps.selectFile,
+        triggerSelectFile: selectFile,
         triggerSystemAction,
         toggleWindowMode,
         processCommand,
-        // Combined props from hooks
+        // Re-spread for full access in consumers
         ...cameraProps,
         ...audioProps,
         ...backendProps
     }), [
         logs, chatHistory, attachment, addLog,
+        historyOffset, hasMoreHistory, loadMoreHistory,
         triggerSystemAction, toggleWindowMode, processCommand,
-        cameraProps, audioProps, backendProps
+        // Specific stable values instead of whole hook objects
+        captureFrame, cameraActive, stream, captureRef, canvasRef,
+        availableCameras, selectedCameraId, setSelectedCameraId,
+        showCameraSelector, setShowCameraSelector,
+        isListening, toggleListening, startRecording, setIsListening,
+        backend, sendMessage, processAudio, selectFile
     ]);
 
     return (

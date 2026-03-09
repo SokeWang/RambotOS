@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFading, subtitleTimeoutRef,
-    setIsListening,
     onAudioEnded,
     setAttachment,
-    setNotification
+    setNotification,
+    setHasMoreHistory
 ) => {
     const [backend, setBackend] = useState(null);
 
@@ -26,6 +26,9 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
 
         // We assume qt.webChannelTransport is injected by the QWebEngine
         if (typeof window.qt !== 'undefined' && window.qt.webChannelTransport) {
+            // Store handlers for cleanup
+            const registeredHandlers = {};
+
             new window.QWebChannel(window.qt.webChannelTransport, function (channel) {
                 const backendBridge = channel.objects.backendBridge;
                 window.backendBridge = backendBridge; // Expose globally for other hooks
@@ -33,18 +36,23 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 addLog('system', 'Backend Bridge Connected');
 
                 // Handle Chat Response
-                backendBridge.chatResponse.connect(function (rawResponse) {
+                registeredHandlers.chatResponse = function (rawResponse) {
                     try {
                         let responseText = rawResponse;
                         let webcamNeeded = false;
                         let toolCalls = [];
+                        let payload = {};
 
                         // Try parsing as JSON
                         if (typeof rawResponse === 'string' && rawResponse.startsWith("{")) {
-                            const payload = JSON.parse(rawResponse);
-                            responseText = payload.text || "";
-                            webcamNeeded = payload.webcam_needed || false;
-                            toolCalls = payload.tool_calls || [];
+                            try {
+                                payload = JSON.parse(rawResponse);
+                                responseText = payload.text || "";
+                                webcamNeeded = payload.webcam_needed || false;
+                                toolCalls = payload.tool_calls || [];
+                            } catch (parseError) {
+                                console.error("Error parsing JSON response", parseError);
+                            }
                         } else if (typeof rawResponse !== 'string') {
                             console.warn("Received non-string response:", rawResponse);
                             responseText = String(rawResponse);
@@ -59,6 +67,14 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
 
                         if (!Array.isArray(structuredContent)) {
                             structuredContent = [{ type: 'text', text: responseText }];
+                        }
+                        
+                        // Extract and Handle GenUI Content
+                        const genUIContent = payload.gen_ui;
+                        console.log('useBackend: Received payload:', payload);
+                        if (genUIContent) {
+                            console.log('useBackend: GenUI detected in payload, content type:', typeof genUIContent);
+                            window.dispatchEvent(new CustomEvent('GenUIReceived', { detail: genUIContent }));
                         }
 
                         if (responseText && responseText.startsWith("Error")) {
@@ -109,42 +125,41 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                                 setIsSubtitleFading(true);
                                 setTimeout(() => setSubtitle(null), 500);
                             }, 8000);
-
                         }
                     } catch (e) {
                         console.error("Error parsing chat response:", e, "Raw:", rawResponse);
                         addLog('error', `Frontend Parse Error: ${e.message}`);
                     }
-                });
+                };
+                backendBridge.chatResponse.connect(registeredHandlers.chatResponse);
 
                 // Handle File Selection
-                backendBridge.attachmentSelected.connect(function (filePath) {
+                registeredHandlers.attachmentSelected = function (filePath) {
                     console.log("Attachment selected:", filePath);
                     const fileName = filePath.split('/').pop();
                     addLog('system', `Attachment Selected: ${fileName}`);
                     setAttachment(filePath);
-                });
+                };
+                backendBridge.attachmentSelected.connect(registeredHandlers.attachmentSelected);
 
                 // Handle ASR Result
                 if (backendBridge.speechRecognized) {
-                    backendBridge.speechRecognized.connect(function (text) {
+                    registeredHandlers.speechRecognized = function (text) {
                         console.log("ASR Recognized:", text);
                         addLog('user', text);
-
                         setChatHistory(prev => [...prev, {
                             type: 'user',
                             content: [{ type: 'text', text: text }],
                             time: new Date(),
                             attachment: "Voice Layer"
                         }]);
-
-                        setIsListening(false);
-                    });
+                    };
+                    backendBridge.speechRecognized.connect(registeredHandlers.speechRecognized);
                 }
 
                 // Handle Frontend TTS
                 if (backendBridge.audioGenerated) {
-                    backendBridge.audioGenerated.connect(function (base64Audio) {
+                    registeredHandlers.audioGenerated = function (base64Audio) {
                         if (base64Audio) {
                             console.log("Playing audio...");
                             if (backendBridge.set_agent_busy) backendBridge.set_agent_busy(true);
@@ -162,40 +177,40 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                                 if (backendBridge.set_agent_busy) backendBridge.set_agent_busy(false);
                             });
                         }
-                    });
+                    };
+                    backendBridge.audioGenerated.connect(registeredHandlers.audioGenerated);
                 }
 
-                // Handle Wake Word
-                if (backendBridge.wakeWordDetected) {
-                    // logic will be handled in useAudio or App via event listener if possible, 
-                    // or we expose a callback registry.
-                    // IMPORTANT: The original code called 'startRecordingRef.current()'.
-                    // We need a way to trigger startRecording from here.
-                }
-
-                // Handle History Loading
                 if (backendBridge.historyLoaded) {
-                    backendBridge.historyLoaded.connect(function (historyJson) {
+                    registeredHandlers.historyLoaded = function (historyDataJson) {
                         try {
-                            const history = JSON.parse(historyJson);
-                            console.log("Loaded history:", history.length);
-                            // Process history if needed (e.g. date conversion)
-                            const processedHistory = history.map(msg => ({
+                            const { messages, offset } = JSON.parse(historyDataJson);
+                            console.log(`Loaded history: ${messages.length}, Offset: ${offset}`);
+
+                            const processedHistory = messages.map(msg => ({
                                 ...msg,
                                 time: new Date(msg.time)
                             }));
-                            setChatHistory(processedHistory);
-                            addLog('system', `Loaded ${history.length} history records`);
+
+                            if (offset === 0) {
+                                setChatHistory(processedHistory);
+                            } else {
+                                // Prepend older messages
+                                setChatHistory(prev => [...processedHistory, ...prev]);
+                            }
+                            if (setHasMoreHistory) setHasMoreHistory(messages.length === 20);
+                            addLog('system', `Loaded ${messages.length} history records (Offset: ${offset})`);
                         } catch (e) {
                             console.error("Failed to parse history:", e);
                         }
-                    });
+                    };
+                    backendBridge.historyLoaded.connect(registeredHandlers.historyLoaded);
 
                     // Request history immediately after connection
                     setTimeout(() => {
                         if (!historyRequested.current) {
                             console.log("Requesting history...");
-                            backendBridge.requestHistory();
+                            backendBridge.requestHistory(0);
                             historyRequested.current = true;
                         }
                     }, 500);
@@ -203,29 +218,45 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
 
                 // Handle Develop Mode
                 if (backendBridge.developModeChanged) {
-                    backendBridge.developModeChanged.connect(function (enabled) {
+                    registeredHandlers.developModeChanged = function (enabled) {
                         console.log("Develop Mode Changed:", enabled);
                         addLog('system', `Develop Mode: ${enabled ? 'ON' : 'OFF'}`);
-                        // We need a way to update the state in RambotContext
                         if (window.onDevelopModeChange) window.onDevelopModeChange(enabled);
-                    });
+                    };
+                    backendBridge.developModeChanged.connect(registeredHandlers.developModeChanged);
                 }
 
                 // Handle System Notifications
                 if (backendBridge.notificationSignal) {
-                    backendBridge.notificationSignal.connect(function (message) {
+                    registeredHandlers.notificationSignal = function (message) {
                         console.log("System Notification Received:", message);
                         addLog('system', `[NOTIFY] ${message}`);
-
                         setNotification(message);
-
                         // Auto clear after 8 seconds
                         setTimeout(() => {
                             setNotification(null);
                         }, 8000);
-                    });
+                    };
+                    backendBridge.notificationSignal.connect(registeredHandlers.notificationSignal);
                 }
             });
+
+            // Cleanup: disconnect all registered signal handlers on unmount
+            return () => {
+                const bridge = window.backendBridge;
+                if (!bridge) return;
+                try {
+                    if (registeredHandlers.chatResponse) bridge.chatResponse.disconnect(registeredHandlers.chatResponse);
+                    if (registeredHandlers.attachmentSelected) bridge.attachmentSelected.disconnect(registeredHandlers.attachmentSelected);
+                    if (bridge.speechRecognized && registeredHandlers.speechRecognized) bridge.speechRecognized.disconnect(registeredHandlers.speechRecognized);
+                    if (bridge.audioGenerated && registeredHandlers.audioGenerated) bridge.audioGenerated.disconnect(registeredHandlers.audioGenerated);
+                    if (bridge.historyLoaded && registeredHandlers.historyLoaded) bridge.historyLoaded.disconnect(registeredHandlers.historyLoaded);
+                    if (bridge.developModeChanged && registeredHandlers.developModeChanged) bridge.developModeChanged.disconnect(registeredHandlers.developModeChanged);
+                    if (bridge.notificationSignal && registeredHandlers.notificationSignal) bridge.notificationSignal.disconnect(registeredHandlers.notificationSignal);
+                } catch (e) {
+                    console.warn("Signal cleanup error:", e);
+                }
+            };
         } else {
             console.log("Qt WebChannel Transport not found (Dev Mode?)");
         }
@@ -245,9 +276,9 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             backend.process_audio(base64Audio, capturedImage || "");
         } else {
             console.error("Backend not connected!");
-            setIsListening(false);
+            // Note: listening state is managed by useAudio, not here
         }
-    }, [backend, setIsListening]);
+    }, [backend]);
 
     const selectFile = useCallback(() => {
         if (backend) {
@@ -261,7 +292,6 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
         backend,
         sendMessage,
         processAudio,
-
         selectFile
     };
 };

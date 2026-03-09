@@ -60,10 +60,10 @@ export default function GestureController({ videoStream, backendBridge, onUpdate
                         delegate: "GPU"
                     },
                     runningMode: "VIDEO",
-                    numHands: 1
+                    numHands: 2
                 });
                 setIsLoaded(true);
-                console.log("Hand Landmarker Loaded");
+                console.log("Hand Landmarker Loaded (Multi-hand)");
             } catch (error) {
                 console.error("Error loading HandLandmarker:", error);
             }
@@ -93,42 +93,57 @@ export default function GestureController({ videoStream, backendBridge, onUpdate
 
                 try {
                     const results = handLandmarkerRef.current.detectForVideo(video, startTimeMs);
+                    const handsData = [];
 
                     if (results.landmarks && results.landmarks.length > 0) {
-                        const landmarks = results.landmarks[0];
-                        const indexTip = landmarks[8];
-                        const thumbTip = landmarks[4];
+                        results.landmarks.forEach((landmarks, index) => {
+                            const indexTip = landmarks[8];
+                            const thumbTip = landmarks[4];
 
-                        const distance = Math.sqrt(
-                            Math.pow(indexTip.x - thumbTip.x, 2) +
-                            Math.pow(indexTip.y - thumbTip.y, 2)
-                        );
+                            const distance = Math.sqrt(
+                                Math.pow(indexTip.x - thumbTip.x, 2) +
+                                Math.pow(indexTip.y - thumbTip.y, 2)
+                            );
 
-                        let targetX = 1 - indexTip.x;
-                        let targetY = indexTip.y;
+                            let targetX = 1 - indexTip.x;
+                            let targetY = indexTip.y;
 
-                        if (cursorMode === 'ema') {
-                            const alpha = 0.2;
-                            if (prevPointRef.current.x !== null) {
-                                targetX = targetX * alpha + prevPointRef.current.x * (1 - alpha);
-                                targetY = targetY * alpha + prevPointRef.current.y * (1 - alpha);
+                            // We only apply smoothing to the "main" hand (first one) for cursor control
+                            // The second hand is mostly for zoom gestures
+                            if (index === 0) {
+                                if (cursorMode === 'ema') {
+                                    const alpha = 0.2;
+                                    if (prevPointRef.current.x !== null) {
+                                        targetX = targetX * alpha + prevPointRef.current.x * (1 - alpha);
+                                        targetY = targetY * alpha + prevPointRef.current.y * (1 - alpha);
+                                    }
+                                    prevPointRef.current = { x: targetX, y: targetY };
+                                } else if (cursorMode === 'kalman') {
+                                    targetX = kalmanXRef.current.filter(targetX);
+                                    targetY = kalmanYRef.current.filter(targetY);
+                                }
                             }
-                            prevPointRef.current = { x: targetX, y: targetY };
-                        } else if (cursorMode === 'kalman') {
-                            targetX = kalmanXRef.current.filter(targetX);
-                            targetY = kalmanYRef.current.filter(targetY);
-                        }
 
-                        const screenX = targetX * window.innerWidth;
-                        const screenY = targetY * window.innerHeight;
-                        const isPinched = distance < 0.05;
+                            const screenX = targetX * window.innerWidth;
+                            const screenY = targetY * window.innerHeight;
+                            const isPinched = distance < 0.05;
 
-                        // Send back to parent (HUD)
-                        if (onUpdate) {
-                            onUpdate({
+                            handsData.push({
                                 x: screenX,
                                 y: screenY,
-                                isPinching: isPinched
+                                isPinching: isPinched,
+                                rawLandmarks: landmarks
+                            });
+                        });
+
+                        // Send back to parent (HUD)
+                        if (onUpdate && handsData.length > 0) {
+                            onUpdate({
+                                hands: handsData,
+                                // For backward compatibility with single hand logic in HUD
+                                x: handsData[0].x,
+                                y: handsData[0].y,
+                                isPinching: handsData[0].isPinching
                             });
                         }
                     }

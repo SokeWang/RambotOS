@@ -28,8 +28,7 @@ const Card = React.memo(({
         <div
             className={`
                 ${variants[variant]}
-                border rounded-[2rem] p-6
-                backdrop-blur-3xl shadow-2xl
+                border rounded-[2rem] p-6 shadow-2xl
                 transition-all duration-300
                 ${onClick ? 'cursor-pointer hover:bg-white/10 hover:border-white/20' : ''}
                 ${className}

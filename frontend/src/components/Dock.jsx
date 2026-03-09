@@ -1,24 +1,35 @@
-
-import React from 'react';
-import { Activity, MessageSquare, Database, Shield, BarChart2, Search, LayoutGrid, Mic, Settings } from 'lucide-react';
-import { LauncherApps } from '../config/LauncherConfig';
+import React, { useState, useCallback, useMemo } from 'react';
+import { Mic, LayoutGrid, Paperclip, Send, File, X } from 'lucide-react';
 import { useRambot } from '../context/RambotContext';
 import { useUI } from '../context/UIContext';
 
-const iconMap = {
-    'activity': Activity,
-    'message-square': MessageSquare,
-    'database': Database,
-    'shield': Shield,
-    'bar-chart-2': BarChart2
-};
-
 export default function Dock({ triggerSystemAction }) {
-    const { isListening, toggleListening } = useRambot();
-    const { setShowChatbox, showChatbox } = useUI();
+    const [inputValue, setInputValue] = useState('');
+    const { 
+        isListening, toggleListening, 
+        processCommand, attachment, selectFile, setAttachment 
+    } = useRambot();
+    const { setShowChatbox, showAppLauncher } = useUI();
+
+    const handleSend = useCallback(() => {
+        if (inputValue.trim() || attachment) {
+            processCommand(inputValue);
+            setInputValue('');
+        }
+    }, [inputValue, attachment, processCommand]);
+
+    const handleKeyPress = useCallback((e) => {
+        if (e.key === 'Enter') {
+            handleSend();
+        }
+    }, [handleSend]);
+
+    const isSendDisabled = useMemo(() => {
+        return !inputValue.trim() && !attachment;
+    }, [inputValue, attachment]);
 
     return (
-        <div className="flex justify-center w-full mb-8 pointer-events-auto">
+        <div className="flex justify-center w-full mb-4 pointer-events-auto">
             {/* Dock Container with Siri Glow */}
             <div className="relative">
                 {/* Apple Intelligence Rainbow Glow (Active when listening) */}
@@ -40,43 +51,7 @@ export default function Dock({ triggerSystemAction }) {
                 )}
 
                 {/* Dock Nav */}
-                <nav className="relative flex items-center gap-3 p-3 bg-white/10 backdrop-blur-[60px] rounded-[3.5rem] border border-white/20 shadow-[0_30px_100px_rgba(0,0,0,0.5)]">
-
-                    {/* Search / Global Actions */}
-                    <button className="p-4 hover:bg-white/10 rounded-full transition-all group">
-                        <Search size={22} className="text-white/30 group-hover:text-white transition-all" />
-                    </button>
-
-                    <div className="w-[1px] h-10 bg-white/10 mx-1" />
-
-                    {/* App Grid Switcher */}
-                    <button className="p-4 hover:bg-white/10 rounded-full transition-all group">
-                        <LayoutGrid size={22} className="text-white/40 group-hover:text-white" />
-                    </button>
-
-                    {/* Main Launcher Apps */}
-                    <div className="flex items-center gap-2">
-                        {LauncherApps.slice(0, 3).map((item, idx) => {
-                            const IconComponent = iconMap[item.icon];
-                            return (
-                                <button
-                                    key={idx}
-                                    data-gaze-target="true"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        triggerSystemAction(item.action);
-                                    }}
-                                    className="p-4 hover:bg-white/10 rounded-full transition-all group relative"
-                                    title={item.name}
-                                >
-                                    {IconComponent && <IconComponent size={22} className="text-white/40 group-hover:text-white transition-all" />}
-                                    <span className="absolute -top-12 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md text-white text-[10px] px-3 py-1.5 rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none uppercase tracking-widest font-bold">
-                                        {item.name}
-                                    </span>
-                                </button>
-                            );
-                        })}
-                    </div>
+                <nav className="relative flex items-center gap-3 p-3 bg-white/10 rounded-[3.5rem] border-t border-white/30 border border-white/10 shadow-[0_30px_100px_rgba(0,0,0,0.5)]">
 
                     {/* AI / Voice Button (The Centerpiece) */}
                     <button
@@ -85,8 +60,8 @@ export default function Dock({ triggerSystemAction }) {
                             e.stopPropagation();
                             toggleListening();
                         }}
-                        className={`mx-2 p-5 rounded-full transition-all duration-500 relative overflow-hidden group
-                        ${isListening ? 'bg-white/20 shadow-[0_0_30px_rgba(255,255,255,0.3)] scale-110' : 'hover:bg-white/10'}`}
+                        className={`mx-2 p-5 rounded-full transition-all duration-[400ms] ease-[cubic-bezier(0.34,1.56,0.64,1)] relative overflow-hidden group hover:-translate-y-1 hover:scale-105
+                        ${isListening ? 'bg-white/20 shadow-[0_0_30px_rgba(255,255,255,0.3)] scale-110' : 'hover:bg-white/10 shadow-lg'}`}
                     >
                         {isListening && (
                             <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/40 via-purple-500/40 to-cyan-400/40 animate-pulse" />
@@ -112,30 +87,67 @@ export default function Dock({ triggerSystemAction }) {
                         </div>
                     </button>
 
-                    <div className="w-[1px] h-10 bg-white/10 mx-1" />
-
-                    {/* Chat Toggle */}
+                    {/* App Launcher Toggle */}
                     <button
                         data-gaze-target="true"
                         onClick={(e) => {
                             e.stopPropagation();
-                            setShowChatbox(!showChatbox);
+                            triggerSystemAction('TOGGLE_LAUNCHER');
                         }}
-                        className={`p-4 rounded-full transition-all group ${showChatbox ? 'bg-white/20' : 'hover:bg-white/10'}`}>
-                        <MessageSquare size={22} className={`${showChatbox ? 'text-white' : 'text-white/40 group-hover:text-white'} transition-all`} />
+                        className={`p-2 rounded-full transition-all duration-[400ms] ease-[cubic-bezier(0.34,1.56,0.64,1)] group hover:-translate-y-0.5 hover:scale-110 ${showAppLauncher ? 'bg-white/20 shadow-lg' : 'hover:bg-white/10'}`}>
+                        <LayoutGrid size={22} className={`${showAppLauncher ? 'text-white' : 'text-white/40 group-hover:text-white'} transition-colors`} />
                     </button>
 
-                    {/* Settings */}
-                    <button
+
+                    {/* Input Area (New Integrated) - Expanded Proportion */}
+                    <div 
                         data-gaze-target="true"
                         onClick={(e) => {
-                            e.stopPropagation();
-                            triggerSystemAction('Settings');
+                            if (e.target.tagName !== 'BUTTON' && !e.target.closest('button')) {
+                                const input = e.currentTarget.querySelector('input');
+                                if (input) input.focus();
+                            }
                         }}
-                        className="p-4 hover:bg-white/10 rounded-full transition-all group"
+                        className="flex items-center gap-3 bg-white/10 rounded-full px-5 py-2 border border-white/10 focus-within:border-white/30 transition-all min-w-[500px] lg:min-w-[700px] shadow-inner cursor-text"
                     >
-                        <Settings size={22} className="text-white/30 group-hover:text-white transition-all" />
-                    </button>
+                        <button
+                            onClick={selectFile}
+                            className="p-1.5 rounded-full hover:bg-white/10 text-white/40 hover:text-white transition-all"
+                        >
+                            <Paperclip size={18} />
+                        </button>
+                        
+                        <div className="relative flex-1 flex items-center">
+                            {attachment && (
+                                <div className="absolute left-0 bg-white/10 px-2 py-0.5 rounded-md border border-white/20 flex items-center gap-2 animate-in fade-in slide-in-from-left-2">
+                                    <File size={10} className="text-white/80" />
+                                    <span className="text-[10px] text-white/90 font-medium max-w-[80px] truncate">
+                                        {attachment.split('/').pop()}
+                                    </span>
+                                    <button onClick={() => setAttachment(null)} className="text-white/50 hover:text-red-400">
+                                        <X size={10} />
+                                    </button>
+                                </div>
+                            )}
+                            <input
+                                data-gaze-ignore="true"
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyPress={handleKeyPress}
+                                placeholder={attachment ? "" : "Communication input..."}
+                                className={`bg-transparent border-none outline-none text-white placeholder-white/20 px-2 py-1 text-sm w-full font-medium ${attachment ? 'pl-24' : ''}`}
+                            />
+                        </div>
+
+                        <button
+                            onClick={handleSend}
+                            disabled={isSendDisabled}
+                            className={`p-1.5 rounded-full transition-all duration-[400ms] ease-[cubic-bezier(0.34,1.56,0.64,1)] ${isSendDisabled ? 'text-white/10' : 'text-white/80 hover:scale-110 active:scale-95 hover:-translate-y-0.5'}`}
+                        >
+                            <Send size={18} />
+                        </button>
+                    </div>
                 </nav>
             </div>
         </div>
