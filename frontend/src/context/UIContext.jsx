@@ -44,6 +44,46 @@ export const UIProvider = ({ children }) => {
         return localStorage.getItem('rambot_genui_enabled') !== 'false'; // Default to true if not set
     });
 
+    // Geolocation State
+    const [userLocation, setUserLocation] = useState(null);
+
+    // Watch Geolocation
+    useEffect(() => {
+        if (!navigator.geolocation) {
+            console.warn("Geolocation is not supported by this browser.");
+            return;
+        }
+
+        // Try getting initial position immediately
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                console.log("Geolocation: Initial position fix:", latitude, longitude);
+                setUserLocation({ lat: latitude, lng: longitude });
+            },
+            (error) => console.warn("Geolocation: Initial fix failed:", error.message),
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+
+        const watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                console.log("Geolocation: Updated position:", latitude, longitude);
+                setUserLocation({ lat: latitude, lng: longitude });
+            },
+            (error) => {
+                console.warn("Geolocation: Error tracking position:", error.message);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0
+            }
+        );
+
+        return () => navigator.geolocation.clearWatch(watchId);
+    }, []);
+
     // Persistence
     useEffect(() => {
         if (wallpaper) {
@@ -116,13 +156,15 @@ export const UIProvider = ({ children }) => {
         activeApp, setActiveApp,
         genUISchema, setGenUISchema,
         showAppLauncher, setShowAppLauncher,
-        genUIEnabled, setGenUIEnabled
+        genUIEnabled, setGenUIEnabled,
+        userLocation
     }), [
         showChatbox, showCameraSelector,
         processingStep, subtitle, isSubtitleFading,
         cursorMode, windowMode, isSystemReady,
         showCameraBackground, wallpaper, activeApp,
-        genUISchema, showAppLauncher, genUIEnabled
+        genUISchema, showAppLauncher, genUIEnabled,
+        userLocation
     ]);
 
     return (

@@ -21,9 +21,11 @@ const catalog = defineCatalog(schema, {
             props: z.object({
                 variant: z.string().optional(),
                 text: z.string().optional(),
+                content: z.string().optional(),
+                value: z.string().optional(),
                 className: z.string().optional()
             }).passthrough(),
-            description: "A text element"
+            description: "A text element. Use 'text' or 'content' for the string."
         },
         Button: {
             props: z.object({
@@ -74,6 +76,44 @@ const catalog = defineCatalog(schema, {
                 className: z.string().optional()
             }).passthrough(),
             description: "Displays a list of files in a directory"
+        },
+        Image: {
+            props: z.object({
+                src: z.string(),
+                alt: z.string().optional(),
+                className: z.string().optional(),
+                aspect_ratio: z.string().optional()
+            }).passthrough(),
+            description: "Displays an image, supports base64 (data:image/...) or URL"
+        },
+        Video: {
+            props: z.object({
+                src: z.string(),
+                className: z.string().optional(),
+                autoPlay: z.boolean().optional(),
+                controls: z.boolean().optional(),
+                loop: z.boolean().optional(),
+                muted: z.boolean().optional()
+            }).passthrough(),
+            description: "Displays a video, supports local file:// URLs"
+        },
+        Link: {
+            props: z.object({
+                href: z.string(),
+                label: z.string().optional(),
+                className: z.string().optional()
+            }).passthrough(),
+            description: "An external link. Use 'label' for the link text."
+        },
+        Map: {
+            props: z.object({
+                query: z.string().optional(),
+                origin: z.string().optional(),
+                destination: z.string().optional(),
+                zoom: z.number().optional(),
+                className: z.string().optional()
+            }).passthrough(),
+            description: "Displays a navigation map. Use 'query' for single points, or 'origin' and 'destination' for routes."
         }
     },
     actions: {}
@@ -93,7 +133,7 @@ const { registry } = defineRegistry(catalog, {
             const Tag = props.variant === 'text' ? 'span' : (props.variant || 'p');
             return (
                 <Tag className={props.className}>
-                    {props.text}
+                    {props.text || props.content || props.value}
                     {children}
                 </Tag>
             );
@@ -240,6 +280,176 @@ const { registry } = defineRegistry(catalog, {
                     </div>
                 </div>
             );
+        },
+        Image: ({ props }) => {
+            const [isExpanded, setIsExpanded] = React.useState(false);
+            return (
+                <div 
+                    className={`relative overflow-hidden group transition-all duration-700 ease-in-out cursor-pointer ${
+                        props.className || ''
+                    } ${isExpanded ? 'max-w-4xl w-full h-auto' : 'max-h-[300px] w-auto h-auto'}`}
+                    onClick={() => setIsExpanded(!isExpanded)}
+                >
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-10" />
+                    <img 
+                        src={props.src} 
+                        alt={props.alt || 'Generated'} 
+                        className={`w-full h-full object-contain rounded-3xl border border-white/20 shadow-2xl transition-transform duration-700 ${
+                            !isExpanded ? 'group-hover:scale-105' : ''
+                        }`}
+                        style={{ aspectRatio: props.aspect_ratio }}
+                    />
+                    {!isExpanded && (
+                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-20">
+                            <LucideIcons.Maximize2 size={32} className="text-white drop-shadow-lg" />
+                        </div>
+                    )}
+                </div>
+            );
+        },
+        Video: ({ props }) => {
+            const videoRef = React.useRef(null);
+            const [error, setError] = React.useState(null);
+
+            // Normalize src: ensure file:/// (3 slashes) for absolute paths
+            const normalizedSrc = React.useMemo(() => {
+                let s = props.src || "";
+                // If starts with /, prepend file:// to make it file:///Users/...
+                if (s.startsWith("/") && !s.startsWith("//")) {
+                    s = "file://" + s;
+                }
+                // Fix file://Users -> file:///Users
+                if (s.startsWith('file://') && !s.startsWith('file:///')) {
+                    s = s.replace('file://', 'file:///');
+                }
+                console.log("RAMBOT_VIDEO_DEBUG_SRC:", s);
+                return s;
+            }, [props.src]);
+
+            return (
+                <div className={`relative overflow-hidden rounded-3xl border border-white/20 shadow-2xl bg-black/40 min-h-[200px] flex items-center justify-center ${props.className || ''}`}>
+                    <div className="absolute top-2 left-2 text-[8px] text-white/10 font-mono z-30">V-4.0.2</div>
+                    {error ? (
+                        <div className="flex flex-col items-center justify-center p-10 text-white/40 text-center">
+                            <LucideIcons.AlertTriangle size={48} className="mb-4 text-yellow-500/50" />
+                            <p className="font-mono text-xs uppercase tracking-widest mb-2">Media Error</p>
+                            <p className="text-xs max-w-xs">{error}</p>
+                            <p className="mt-4 text-[10px] opacity-50 font-mono break-all">{normalizedSrc}</p>
+                        </div>
+                    ) : (
+                        <video 
+                            ref={videoRef}
+                            autoPlay={props.autoPlay ?? true}
+                            controls={props.controls ?? true}
+                            loop={props.loop ?? true}
+                            muted={props.muted ?? true} // Default to muted for autoplay compatibility
+                            playsInline
+                            className="w-full h-full object-contain rounded-3xl max-h-[600px]"
+                            onError={(e) => {
+                                const videoElement = e.target;
+                                const errorCode = videoElement.error ? videoElement.error.code : 'Unknown';
+                                const errorMessage = videoElement.error ? videoElement.error.message : '';
+                                console.error("Video error:", errorCode, errorMessage);
+                                
+                                let detailedError = "The video could not be loaded.";
+                                if (errorCode === 1) detailedError = "Fetching process aborted by user.";
+                                if (errorCode === 2) detailedError = "Network error while fetching the video.";
+                                if (errorCode === 3) detailedError = "Video decoding failed. The format might be unsupported or the file is corrupted.";
+                                if (errorCode === 4) detailedError = "Video format or source not supported by the browser engine.";
+                                
+                                setError(`${detailedError} (Error Code: ${errorCode}${errorMessage ? ` - ${errorMessage}` : ''})`);
+                            }}
+                            onLoadedMetadata={() => setError(null)}
+                        >
+                            <source src={normalizedSrc.replace(/\.mp4$/, '.webm')} type="video/webm" />
+                            <source src={normalizedSrc.replace(/\.webm$/, '.mp4')} type="video/mp4" />
+                            Your browser does not support the video tag.
+                        </video>
+                    )}
+                </div>
+            );
+        },
+        Link: ({ props }) => (
+            <a 
+                href={props.href} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className={`inline-flex items-center gap-2 px-4 py-2 bg-blue-500/20 text-blue-400 rounded-xl border border-blue-500/30 hover:bg-blue-500/30 transition-all font-medium ${props.className || ''}`}
+                data-gaze-target="true"
+            >
+                <span>{props.label || props.href}</span>
+                <LucideIcons.ExternalLink size={14} className="opacity-50" />
+            </a>
+        ),
+        Map: ({ props }) => {
+            const { userLocation } = useUI();
+            const zoom = props.zoom || 14;
+            const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY;
+            const { query, origin, destination, className } = props;
+            
+            // Resolve "Current Location" to exact GPS coordinates if available
+            const resolveLoc = (loc) => {
+                if ((loc === "Current Location" || !loc) && userLocation) {
+                    return `${userLocation.lat},${userLocation.lng}`;
+                }
+                return loc;
+            };
+
+            const resolvedOrigin = resolveLoc(origin);
+            const resolvedDestination = resolveLoc(destination || query);
+            
+            let src = "";
+            let displayTitle = query || destination || "Navigation Map";
+
+            if (apiKey) {
+                // Official Embed API
+                if (resolvedOrigin && resolvedDestination) {
+                    src = `https://www.google.com/maps/embed/v1/directions?key=${apiKey}&origin=${encodeURIComponent(resolvedOrigin)}&destination=${encodeURIComponent(resolvedDestination)}&zoom=${zoom}`;
+                } else {
+                    src = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${encodeURIComponent(resolvedDestination)}&zoom=${zoom}`;
+                }
+            } else {
+                // Public Fallback - Use maps.google.com for better compatibility
+                if (resolvedOrigin && resolvedDestination) {
+                    src = `https://maps.google.com/maps?saddr=${encodeURIComponent(resolvedOrigin)}&daddr=${encodeURIComponent(resolvedDestination)}&output=embed&z=${zoom}`;
+                } else {
+                    src = `https://maps.google.com/maps?q=${encodeURIComponent(resolvedDestination)}&output=embed&z=${zoom}`;
+                }
+            }
+
+            return (
+                <div className={`relative w-full h-full min-h-[400px] overflow-hidden group ${className || ''}`}>
+                    <iframe
+                        title="Navigation Map"
+                        width="100%"
+                        height="100%"
+                        frameBorder="0"
+                        style={{ 
+                            border: 0, 
+                            filter: apiKey ? 'invert(90%) hue-rotate(180deg) brightness(0.9) contrast(1.1)' : 'none',
+                            pointerEvents: 'auto',
+                            backgroundColor: '#18181b'
+                        }}
+                        src={src}
+                        allowFullScreen
+                        allow="geolocation"
+                    ></iframe>
+                    
+                    {/* Immersive Footer Only */}
+                    <div className="absolute bottom-8 right-8 z-20 pointer-events-none flex flex-col items-end gap-2">
+                         {userLocation && (
+                             <div className="px-3 py-1 bg-cyan-500/20 backdrop-blur-md rounded-full border border-cyan-500/30 flex items-center gap-2 animate-pulse">
+                                 <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                                 <span className="text-[8px] font-mono text-cyan-400 uppercase tracking-widest font-bold">High Precision GPS</span>
+                             </div>
+                         )}
+                         <div className="px-4 py-2 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 flex items-center gap-2 opacity-20 hover:opacity-100 transition-opacity">
+                             <LucideIcons.Shield size={12} className="text-white/20" />
+                             <span className="text-[10px] font-mono text-white/30 uppercase tracking-widest">Geo-Engine 5.0 Immersive</span>
+                         </div>
+                    </div>
+                </div>
+            );
         }
     }
 });
@@ -251,19 +461,45 @@ const { registry } = defineRegistry(catalog, {
 const GenUIPanel = () => {
     const { genUISchema } = useUI();
 
-    return (
-        <div className="w-full h-full p-8 overflow-y-auto custom-scrollbar pointer-events-auto">
-            <div className="w-full min-h-full bg-black/40 rounded-[3rem] border border-white/10 p-10 shadow-2xl flex flex-col items-center justify-center relative overflow-hidden">
-                <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent blur-3xl rounded-[3rem] pointer-events-none" />
+    // Check if we only have a Map component to go full immersive
+    const isImmersiveMap = React.useMemo(() => {
+        if (!genUISchema || !genUISchema.elements) return false;
+        const rootElement = genUISchema.elements[genUISchema.root];
+        if (!rootElement) return false;
+        
+        // Either the root is a Map, or it's a Container with only one child which is a Map
+        if (rootElement.type === 'Map') return true;
+        if (rootElement.type === 'Container' && rootElement.children?.length === 1) {
+            const childId = rootElement.children[0];
+            const childElement = genUISchema.elements[childId];
+            return childElement?.type === 'Map';
+        }
+        return false;
+    }, [genUISchema]);
 
-                <div className="relative z-10 w-full flex flex-col items-center justify-center text-white">
+    return (
+        <div className={`w-full h-full overflow-hidden pointer-events-auto ${isImmersiveMap ? 'p-0' : 'p-8'}`}>
+            <div className={`w-full h-full flex flex-col items-center justify-center relative overflow-hidden ${isImmersiveMap ? '' : 'bg-black/40 shadow-2xl rounded-[3rem] border border-white/10 p-10'}`}>
+                {!isImmersiveMap && <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent blur-3xl rounded-[3rem] pointer-events-none" />}
+
+                <div className="relative z-10 w-full h-full flex flex-col items-center justify-center text-white">
                     {genUISchema ? (
                         <div className="animate-in fade-in zoom-in duration-700 w-full flex flex-col items-center justify-center">
                             {(() => {
                                 try {
+                                    // Normalize spec: ensure all elements have a children array
+                                    const normalizedSpec = { ...genUISchema };
+                                    if (normalizedSpec.elements) {
+                                        Object.keys(normalizedSpec.elements).forEach(key => {
+                                            if (!normalizedSpec.elements[key].children) {
+                                                normalizedSpec.elements[key].children = [];
+                                            }
+                                        });
+                                    }
+                                    
                                     return (
                                         <JSONUIProvider>
-                                            <Renderer spec={genUISchema} registry={registry} />
+                                            <Renderer spec={normalizedSpec} registry={registry} />
                                         </JSONUIProvider>
                                     );
                                 } catch (e) {
@@ -280,7 +516,6 @@ const GenUIPanel = () => {
                         <div className="flex flex-col items-center justify-center text-white/40 space-y-6 animate-pulse">
                             <LucideIcons.Layers size={64} className="opacity-50" />
                             <p className="font-mono uppercase tracking-[0.3em] font-bold text-sm text-cyan-400/50">Awaiting Subroutine</p>
-                            {genUISchema && <div className="text-[8px] text-white/10 max-w-xs truncate">{JSON.stringify(genUISchema)}</div>}
                         </div>
                     )}
                 </div>

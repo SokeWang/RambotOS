@@ -14,6 +14,9 @@ import re
 from collections import OrderedDict
 from agents.base_agent import BaseAgent
 from typing import Any, List, AsyncGenerator
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+from services.media_processor import MediaProcessor
 
 class LangchainBrain(BaseAgent):
     def __init__(self):
@@ -22,63 +25,50 @@ class LangchainBrain(BaseAgent):
             api_key=CFG.api_key,
             max_retries=10  # Integrated retry logic
         )
-
-        self.histories: dict[str, History] = {}
+            
         self.long_term_memory = MemoryManager()
         
-        self._AGENT_CACHE_MAX = 100
-        self.agent_managers: OrderedDict[str, Any] = OrderedDict()
+        self.long_term_memory = MemoryManager()
         self._init_lock = asyncio.Lock()
         self._cached_prompt: dict[str, str] = {}
-
-    def get_history(self, session_id: str) -> History:
-        """Get or create History manager for a session."""
-        if session_id not in self.histories:
-            self.histories[session_id] = History(session_id=session_id)
-        return self.histories[session_id]
+        self._cached_name: str = ""
+        self.checkpointer = None
+        self.checkpointer_context = None
 
     async def initialize(self):
         async with self._init_lock:
-            if self.agent_managers:
+            if self.checkpointer:
                 return
             
             logger.info("Initializing Agent Components...")
+            self.checkpointer_context = AsyncSqliteSaver.from_conn_string(CFG.SQLITE_DB_PATH)
+            self.checkpointer = await self.checkpointer_context.__aenter__()
             
             # Initial discovery
             skill_index.initialize()
 
-    def get_agent(self, session_id: str, skills: list = None) -> Any:
-        """Get or create an Agent (LRU-bounded cache)."""
-        skills_tuple = tuple(sorted(skills)) if skills else ()
-        agent_key = f"{session_id}_{hash(skills_tuple)}"
+    def _create_agent(self, session_id: str, skills: list = None) -> Any:
+        """Creates a fresh Agent instance with current skills and prompt."""
+        logger.info(f"Creating fresh Agent for session: {session_id}")
+        all_tools = tool_manager.get_tools(session_id=session_id, skills=skills)
+        system_prompt = self._get_cached_system_prompt(is_master=(session_id == "master"))
         
-        if agent_key in self.agent_managers:
-            # Move to end to mark as recently used
-            self.agent_managers.move_to_end(agent_key)
-        else:
-            logger.info(f"Creating Agent for session: {session_id}")
-            all_tools = tool_manager.get_tools(session_id=session_id, skills=skills)
-            self.agent_managers[agent_key] = create_agent(
-                model=self.model,
-                tools=all_tools,
-                response_format=AIResponse
-            )
-            # Evict least-recently-used entry if over limit
-            if len(self.agent_managers) > self._AGENT_CACHE_MAX:
-                self.agent_managers.popitem(last=False)
-        
-        return self.agent_managers[agent_key]
+        return create_agent(
+            model=self.model,
+            tools=all_tools,
+            system_prompt=system_prompt,
+            response_format=AIResponse,
+            checkpointer=self.checkpointer
+        )
 
     async def run(self, content: list, is_master: bool = True, session_id: str = "global", user_name: str = "User") -> AsyncGenerator[dict, None]:
-        if not self.agent_managers:
+        if not self.checkpointer:
             await self.initialize()
 
         # 1. Prepare history and messages
-        raw_query = self._extract_raw_query(content)
-        history_manager = self.get_history(session_id)
-        await history_manager.add("user", content)
-        raw_history = await history_manager.get()
-        formatted_messages = self._prepare_messages(raw_history)
+        # We only need the latest user message to pass to the agent; 
+        # previous history is already in the checkpointer.
+        formatted_messages = [HumanMessage(content=content)]
         
         # 2. Prepare environment
         skill_index.refresh_if_needed()
@@ -86,51 +76,49 @@ class LangchainBrain(BaseAgent):
         
         # 3. Execute agent loop with retries and streaming
         brain_response = None
+        current_turn_messages = []
         async for chunk in self._execute_agent_loop(session_id, system_prompt, formatted_messages):
-            if isinstance(chunk, dict) and "brain_response" in chunk:
-                brain_response = chunk["brain_response"]
-            else:
-                yield chunk
+            if isinstance(chunk, dict):
+                if "brain_response" in chunk:
+                    brain_response = chunk["brain_response"]
+                if "internal_turns" in chunk:
+                    current_turn_messages.extend(chunk["internal_turns"])
+                    continue # Don't yield internal turns to UI
+            
+            yield chunk
 
         if brain_response:
             # 4. Process response
-            reply_text, tool_calls, gen_ui = self._process_response_content(brain_response)
+            # Only extract tool calls from messages generated in this run
+            reply_text, gen_ui = self._process_response_content(brain_response)
+            tool_calls = self._extract_tool_calls_from_response(current_turn_messages)
             
             # 5. Yield final result
             yield {"reply": reply_text, "tool_calls": tool_calls, "gen_ui": gen_ui}
 
-            # 6. Post-Processing
-            await self._save_history_and_memory(session_id, history_manager, raw_query, reply_text, tool_calls, brain_response)
-
-    def _prepare_messages(self, raw_history: list) -> list:
-        """Converts raw history into LangChain message objects."""
-        formatted_messages = []
-        for msg in raw_history:
-            role = msg.get("role", "user")
-            content = msg.get("content", [])
-            
-            # LangChain HumanMessage handles dict-based multimodal content natively
-            if role in ("ai", "assistant"):
-                formatted_messages.append(AIMessage(content=content if isinstance(content, str) else str(content)))
-            else:
-                formatted_messages.append(HumanMessage(content=content))
-        return formatted_messages
+            # 6. Post-Processing (Long-term memory only)
+            if brain_response["structured_response"].save_to_long_term_memory:
+                raw_query = MediaProcessor.summarize_input(content)
+                asyncio.create_task(self._extract_knowledge(raw_query, reply_text, session_id))
 
     async def _execute_agent_loop(self, session_id: str, system_prompt: str, formatted_messages: list):
         """Executes the agent loop with retry logic and yields progress updates."""
         internal_turns = []
         brain_response = None
-        # Simplified loop: Model-level retries handle transient errors; high-level loop for tool execution
         try:
-            current_agent = self.get_agent(session_id)
-            current_messages = [SystemMessage(content=system_prompt)] + formatted_messages + internal_turns
+            current_agent = self._create_agent(session_id)
 
             async for event in current_agent.astream_events(
-                {"messages": current_messages},
+                {"messages": formatted_messages},
                 version="v2",
-                config={"recursion_limit": CFG.recursion_limit}
+                config={
+                    "recursion_limit": CFG.recursion_limit,
+                    "configurable": {"thread_id": session_id}
+                }
             ):
-                if not isinstance(event, dict): continue
+                if not isinstance(event, dict): 
+                    continue
+                
                 kind = event.get("event")
                 
                 if kind == "on_chat_model_end":
@@ -140,14 +128,17 @@ class LangchainBrain(BaseAgent):
                 
                 elif kind == "on_tool_start":
                     if event.get("name") != "AIResponse":
-                        yield {"reply": f"Processing with {event.get('name')}...", "tool_calls": [{"name": event.get("name"), "status": "running"}]}
+                        current_tools = self._extract_tool_calls_from_response(internal_turns)
+                        current_tools.append({"name": event.get("name"), "status": "running", "input": ""})
+                        yield {"reply": f"Processing with {event.get('name')}...", "tool_calls": current_tools}
                 
                 elif kind == "on_tool_end":
                     if event.get("name") != "AIResponse":
                         tool_output = event.get("data", {}).get("output", "")
                         call_id = event.get("data", {}).get("tool_call_id") or event.get("run_id")
                         internal_turns.append(ToolMessage(content=str(tool_output), tool_call_id=call_id))
-                        yield {"reply": f"Finished {event.get('name')}.", "tool_calls": [{"name": event.get('name'), "status": "success", "output": str(tool_output)}]}
+                        current_tools = self._extract_tool_calls_from_response(internal_turns)
+                        yield {"reply": f"Finished {event.get('name')}.", "tool_calls": current_tools}
                 
                 elif kind == "on_chain_end":
                     output = event.get("data", {}).get("output")
@@ -155,17 +146,16 @@ class LangchainBrain(BaseAgent):
                         brain_response = output
             
             if brain_response:
-                yield {"brain_response": brain_response}
+                yield {"brain_response": brain_response, "internal_turns": internal_turns}
                 
         except Exception as e:
             logger.error(f"Brain Agent execution failed: {e}")
             yield {"reply": f"Error: {e}", "tool_calls": []}
 
     def _process_response_content(self, brain_response: dict):
-        """Extracts reply, tool calls, and GenUI content from brain_response."""
+        """Extracts reply and GenUI content from brain_response."""
         sr = brain_response.get("structured_response")
         reply_text = getattr(sr, "reply", "")
-        tool_calls = self._extract_tool_calls_from_response(brain_response)
         
         gen_ui = None
         if hasattr(sr, "gen_ui") and sr.gen_ui:
@@ -174,19 +164,8 @@ class LangchainBrain(BaseAgent):
             else:
                 gen_ui = sr.gen_ui.model_dump() if hasattr(sr.gen_ui, "model_dump") else sr.gen_ui
         
-        return reply_text, tool_calls, gen_ui
+        return reply_text, gen_ui
 
-    async def _save_history_and_memory(self, session_id, history_manager, raw_query, reply_text, tool_calls, brain_response):
-        """Saves interaction to history and potentially to long-term memory."""
-        ai_content = [{"type": "text", "text": reply_text}]
-        if tool_calls:
-            import json
-            ai_content.append({"type": "text", "text": f"__TOOL_CALLS_METADATA__: {json.dumps(tool_calls)}"})
-            
-        await history_manager.add("ai", ai_content)
-
-        if brain_response["structured_response"].save_to_long_term_memory:
-            asyncio.create_task(self._extract_knowledge(raw_query, reply_text, session_id))
 
     async def _extract_knowledge(self, user_query: str, ai_reply: str, session_id: str):
         """
@@ -207,10 +186,9 @@ class LangchainBrain(BaseAgent):
         except Exception as e:
             logger.error(f"Knowledge extraction failed: {e}")
 
-    def _extract_tool_calls_from_response(self, brain_response: dict) -> list:
+    def _extract_tool_calls_from_response(self, messages: list) -> list:
         """Extract tool calls and results from messages in the response."""
         extracted = []
-        messages = brain_response.get("messages", [])
         # Tool calls usually come in pairs: AIMessage (call) followed by ToolMessage (result)
         for i, msg in enumerate(messages):
             # Check for tool calls in message attributes (LangChain style)
@@ -238,12 +216,6 @@ class LangchainBrain(BaseAgent):
                     extracted.append(tc_record)
         return extracted
 
-    def _extract_raw_query(self, content: list) -> str:
-        """Extracts text from message content list."""
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text": return item["text"]
-            if hasattr(item, "text"): return item.text
-        return str(content)
     
     def _get_cached_system_prompt(self, is_master: bool = True, user_name: str = "User") -> str:
         """

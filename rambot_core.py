@@ -199,7 +199,7 @@ async def chat_with_gateway(req: ChatRequest, session_svc: SessionService = Depe
             # Pass session_id and user_name to brain
             async for response in brain.run(inputs, is_master=is_master, session_id=session_id, user_name=user_name):
                 if response.get("gen_ui"):
-                    logger.info(f"Core: GenUI detected in brain response. Length: {len(response.get('gen_ui'))}")
+                    logger.info(f"Core: GenUI detected: {json.dumps(response.get('gen_ui'))}")
                 yield json.dumps(response) + "\n"
         except Exception as e:
             logger.error(f"Core: Brain failed: {e}")
@@ -231,7 +231,7 @@ async def get_chat_history(session_id: str = "os_user", limit: int = 20, offset:
     actual_session_id = session_record.get("session_id", session_id)
     
     logger.debug(f"Core: Fetching history for {session_id} -> Actual Session: {actual_session_id}, Offset: {offset}")
-    history_manager = History(session_id=actual_session_id)
+    history_manager = History(session_id=actual_session_id, checkpointer=brain.checkpointer)
     return await history_manager.get(limit=limit, skip=offset, with_time=True)
 
 @app.get("/memory")

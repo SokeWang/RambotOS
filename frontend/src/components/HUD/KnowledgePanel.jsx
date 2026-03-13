@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRambot } from '../../context/RambotContext';
 import { Brain, Search, Trash2, Database, Clock, User, Bot, RefreshCw, LayoutGrid, Network } from 'lucide-react';
-import MemoryGraph from './MemoryGraph';
+
+const MemoryGraph = React.lazy(() => import('./MemoryGraph'));
 
 export default function KnowledgePanel({ viewMode = 'list', refreshNonce = 0 }) {
     const { backend } = useRambot();
@@ -92,7 +93,13 @@ export default function KnowledgePanel({ viewMode = 'list', refreshNonce = 0 }) 
                             <p className="text-sm font-mono tracking-widest uppercase">No relevant neural traces found in the memory bank.</p>
                         </div>
                     ) : viewMode === 'graph' ? (
-                        <MemoryGraph memories={filteredMemories} onDelete={handleDelete} />
+                        <React.Suspense fallback={
+                            <div className="h-full flex items-center justify-center">
+                                <RefreshCw className="w-8 h-8 text-purple-500 animate-spin" />
+                            </div>
+                        }>
+                            <MemoryGraph memories={filteredMemories} onDelete={handleDelete} />
+                        </React.Suspense>
                     ) : (
                         <div className="h-full overflow-y-auto px-6 pb-6 custom-scrollbar relative">
                             {/* Mask gradient at bottom to softly fade out text if user wants, but currently we just let it bleed */}

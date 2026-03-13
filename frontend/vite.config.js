@@ -8,9 +8,19 @@ export default defineConfig({
     base: './', // Crucial for file:// protocol loading in Qt
     build: {
         outDir: 'dist',
-        content: [
-            "./index.html",
-            "./src/**/*.{js,ts,jsx,tsx}",
-        ],
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    'vendor': [
+                        'react',
+                        'react-dom',
+                        'framer-motion',
+                        'lucide-react',
+                        'zod'
+                    ],
+                }
+            }
+        },
+        chunkSizeWarningLimit: 600,
     },
 })

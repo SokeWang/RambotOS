@@ -4,14 +4,10 @@ import Dock from './Dock';
 import MainCanvas from './MainCanvas';
 import ChatPanel from './ChatPanel';
 import HeaderPanel from './HUD/HeaderPanel';
-import GestureController from './GestureController';
-import VisionGaze from './VisionGaze';
-import VisionWindow from './VisionWindow';
-import SettingsPanel from './HUD/SettingsPanel';
-import SkillsPanel from './HUD/SkillsPanel';
-import KnowledgePanel from './HUD/KnowledgePanel';
 import HeartbeatPanel from './HUD/HeartbeatPanel';
 import GenUIPanel from './HUD/GenUIPanel';
+
+const GestureController = React.lazy(() => import('./GestureController'));
 import { Cpu, X, Activity, LayoutGrid, Network, RefreshCw } from 'lucide-react';
 import { useUI } from '../context/UIContext';
 import { useRambot } from '../context/RambotContext';
@@ -26,7 +22,8 @@ export default function HUD() {
         setActiveApp,
         notification,
         setNotification,
-        showAppLauncher
+        showAppLauncher,
+        showCameraBackground
     } = useUI();
 
     // Knowledge View Mode State (Shared with KnowledgePanel)
@@ -100,8 +97,8 @@ export default function HUD() {
 
     const updatePointerPosition = useCallback((clientX, clientY) => {
         // Significantly increased exit radius for stronger lock, keeping original entry
-        const entryThreshold = 80; // Restored original
-        const exitThreshold = 220; // Kept high for strong lock (Was 140)
+        const entryThreshold = showCameraBackground ? 80 : 0; // 0 if background passthrough disabled
+        const exitThreshold = showCameraBackground ? 220 : 0; // 0 if background passthrough disabled
         const isAlreadySnapped = !!snappedTarget.current;
         let currentThreshold = isAlreadySnapped ? exitThreshold : entryThreshold;
 
@@ -117,7 +114,7 @@ export default function HUD() {
 
         let closest = null;
         let closestEl = null;
-        let minDistance = currentThreshold;
+        let minDistance = Infinity;
 
         targets.forEach(el => {
             const style = window.getComputedStyle(el);
@@ -137,7 +134,14 @@ export default function HUD() {
 
             if (dist < thresholdAdjustment && dist < minDistance) {
                 minDistance = dist;
-                closest = { x: centerX, y: centerY };
+                // Magnetic Pull Logic: instead of hard snapping to center, 
+                // we pull the cursor 85% of the way towards the center.
+                // This keeps the visual cursor connected to physical movement.
+                const pullFactor = 0.85; 
+                closest = { 
+                    x: centerX + (clientX - centerX) * (1 - pullFactor), 
+                    y: centerY + (clientY - centerY) * (1 - pullFactor) 
+                };
                 closestEl = el;
             }
         });
@@ -146,8 +150,8 @@ export default function HUD() {
         scrollables.forEach(el => {
             if (el.scrollHeight > el.clientHeight) {
                 const rect = el.getBoundingClientRect();
-                const entryZone = 20; // Restored original
-                const exitZone = 80; // Harder to accidentally slip off scrollbar (Was 60)
+                const entryZone = 20; 
+                const exitZone = 80; 
                 const isCurrentScrollbar = snappedTarget.current === el && snappedTarget.currentIsScrollbar;
                 const activeZone = isCurrentScrollbar ? exitZone : entryZone;
 
@@ -157,9 +161,14 @@ export default function HUD() {
                 if (isInVerticalZone && isNearRightEdge) {
                     const scrollbarCenterX = rect.right - 6;
                     const dist = Math.abs(clientX - scrollbarCenterX);
-                    if (dist < activeZone && dist < minDistance) {
+                    if (dist < activeZone && (closest === null || dist < minDistance)) {
                         minDistance = dist;
-                        closest = { x: scrollbarCenterX, y: clientY };
+                        // For scrollbars, we pull X heavily but let Y follow freely
+                        const pullFactorX = 0.9;
+                        closest = { 
+                            x: scrollbarCenterX + (clientX - scrollbarCenterX) * (1 - pullFactorX), 
+                            y: clientY 
+                        };
                         closestEl = el;
                         snappedToScrollbar = true;
                     }
@@ -206,16 +215,17 @@ export default function HUD() {
             const scrollFactor = snappedTarget.current.scrollHeight / snappedTarget.current.clientHeight;
             snappedTarget.current.scrollTop = scrollStateRef.current.startScrollTop + (dy * scrollFactor);
         }
-    }, [isDragging]);
+    }, [isDragging, showCameraBackground]);
 
     // Handle updates from GestureController
     const onGestureUpdate = useCallback(({ hands, x, y, isPinching: gesturePinching }) => {
         updatePointerPosition(x, y);
 
         // Always dispatch synthetic mousemove so native canvas/D3 listeners can follow the hand pointer
+        // Using snapped/pulled coordinates from mousePosRef.current for consistency
         const moveEvt = new MouseEvent('mousemove', {
             view: window, bubbles: true, cancelable: true,
-            clientX: x, clientY: y,
+            clientX: mousePosRef.current.x, clientY: mousePosRef.current.y,
         });
         document.dispatchEvent(moveEvt);
 
@@ -550,11 +560,13 @@ export default function HUD() {
 
             {/* Gesture Controller (Hand Tracking) */}
             {cameraActive && stream && backend && (
-                <GestureController
-                    videoStream={stream}
-                    backendBridge={backend}
-                    onUpdate={onGestureUpdate}
-                />
+                <React.Suspense fallback={null}>
+                    <GestureController
+                        videoStream={stream}
+                        backendBridge={backend}
+                        onUpdate={onGestureUpdate}
+                    />
+                </React.Suspense>
             )}
 
             {/* Bottom Glow Effect (Removed inset bottom shadow to prevent overlapping app content) */}

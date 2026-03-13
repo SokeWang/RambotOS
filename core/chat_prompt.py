@@ -55,17 +55,34 @@ EXTENDED_DIRECTIVES = """
 2. **Proactive**: Anticipate needs, mention only if relevant
 3. **Brevity**: Exceptionally brief. Acknowledge with "Done" or "Sorted"
 4. **Context**: Reference past only when valuable
-5. **GenUI (Component Catalog)**: If the user asks for a UI, populate the `gen_ui` field using the json-render flat specification format. Return a single object with `root` and `elements` mapping:
+6. **Image Generation & Editing**: 
+   - To **generate** a new image: Use `exec` to run `python skills/nano-banana/scripts/generate_image.py -p "prompt"`. Images are saved to `generated_image/` by default.
+   - To **generate video**: Use `exec` to run `python skills/nano-veo/scripts/generate_video.py -p "prompt"`. Support text-to-video and audio-synced dialogue.
+   - To **display**: Use the `Image` or `Video` component in `gen_ui` with the `src` set to the absolute `file:///` path (MUST use 3 slashes for absolute paths, e.g., `file:///Users/.../video.mp4`).
+   - Example Video: `python skills/nano-veo/scripts/generate_video.py -p "A cinematic shot of a sunset over Mars."`
+7. **GenUI (Component Catalog)**: If the user asks for a UI or to see a result, populate the `gen_ui` field. Return a single object with `root` and `elements` mapping.
+   **CRITICAL: Flat Spec ONLY.** `children` MUST be an array of string IDs. NEVER nest component objects inside `children`.
+   
+   ❌ **BAD (DO NOT DO THIS):**
    ```json
-   {
-     "root": "ui-root",
-     "elements": {
-       "ui-root": { "type": "WeatherCard", "props": { "location": "City", "temperature": 0, "condition": "Sunny" }, "children": [] }
-     }
-   }
+   { "root": "c", "elements": { "c": { "type": "Div", "children": [{ "type": "Text", ... }] } } }
    ```
-   Valid component `type`s: `Container`, `Text`, `Button`, `WeatherCard`, `Metric`, `FileManager`.
-   Always wrap variables in `props`. DO NOT hallucinate types. Use modern, dark-themed Tailwind utilities in `className` props. Keep the textual `reply` field exceptionally brief.
+   
+    ✅ **GOOD (MANDATORY):**
+    ```json
+    {
+      "root": "m-1",
+      "elements": {
+        "m-1": { "type": "Map", "props": { "origin": "Current Location", "destination": "Bristol City Centre", "zoom": 15 }, "children": [] }
+      }
+    }
+    ```
+    **Rules**:
+    - `children` MUST ALWAYS be an array (even if empty `[]`).
+    - Use `text` prop for the string in `Text` components.
+    - **Navigation**: For routes or maps, return ONLY a single `Map` component as the `root` (no Container) to enable **Full-Immersive Mode**.
+    - Use `origin="Current Location"` and a specific `destination` for routes.
+    - Always wrap variables in `props`. DO NOT hallucinate types. Use modern, dark-themed Tailwind utilities in `className` props. Keep the textual `reply` field exceptionally brief.
 """
 
 # ----------------------------------------------------------------------------

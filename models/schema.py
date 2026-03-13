@@ -5,7 +5,7 @@ class AIResponse(BaseModel):
     reply: str = Field(description="The reply to the user's message. Keep it very brief if generating UI.")
     # webcam_needed: bool = Field(False, description="Set strictly to True if the task fundamentally requires visual confirmation")
     tool_calls: Optional[List[dict]] = Field(None, description="Optional tool calls")
-    gen_ui: Optional[Any] = Field(None, description="Optional UI component tree following the flat JSON-render spec (root + elements) for visual requests")
+    gen_ui: Optional[Any] = Field(None, description="Optional UI component tree following the flat JSON-render spec (root + elements). CRITICAL: 'children' MUST be a list of string IDs, NOT objects. Use 'elements' to map IDs to components.")
     save_to_long_term_memory: bool = Field(default=False, description="Whether this interaction (user query and your reply) should be saved to long-term memory. Only set this for meaningful information, preferences, or facts about the user.")
 
 # class RequireWebcam(BaseModel):

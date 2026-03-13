@@ -20,3 +20,4 @@ python-telegram-bot
 motor
 agentmail
 ddgs
+langgraph-checkpoint-sqlite

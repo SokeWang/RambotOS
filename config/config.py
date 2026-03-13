@@ -32,3 +32,6 @@ class CFG:
     
     # MongoDB Configuration
     mongodb_uri = "mongodb://mongodb:27017"
+
+    # SQLite Configuration
+    SQLITE_DB_PATH = os.path.join(PROJECT_ROOT, "db", "memory.sqlite")

@@ -19,7 +19,7 @@ def evaluate():
     env = VecFrameStack(env, n_stack=4, channels_order="last")
 
     # Load discrete model
-    model_path = "../models/best_model" # Or ppo_car_racing_discrete
+    model_path = "../models/best_model"
     try:
         model = PPO.load(model_path, device=device)
         print(f"Model loaded from {model_path}")

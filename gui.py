@@ -21,7 +21,7 @@ from utils.exceptions import ErrorHandler, MediaProcessingError, ASRError
 from utils.concurrency import get_concurrency_manager
 import requests
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite"
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite --allow-file-access-from-files"
 from PySide6.QtCore import Qt
 
 def run_gui():
@@ -336,14 +336,14 @@ def run_gui():
                             if text.startswith("__TOOL_CALLS_METADATA__: "):
                                 try:
                                     tool_calls_json = text.replace("__TOOL_CALLS_METADATA__: ", "")
-                                    tool_calls = json.loads(tool_calls_json)
+                                    tool_calls.extend(json.loads(tool_calls_json))
                                 except:
                                     pass
                             else:
                                 text_content = text
                         elif item.get("type") == "tool_calls":
                             # Backward compatibility for the 5 mins this existed
-                            tool_calls = item.get("calls", [])
+                            tool_calls.extend(item.get("calls", []))
                     
                     if not text_content and content_list:
                         # Fallback for old simple format

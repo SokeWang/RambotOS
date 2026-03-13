@@ -178,3 +178,32 @@ class MediaProcessor:
             types = [item.get("type") for item in inputs]
             logger.debug(f"Parsed multimodal input with {len(inputs)} blocks: {types}")
         return inputs
+
+    @staticmethod
+    def summarize_input(content) -> str:
+        """
+        Universal flattener for multimodal/mixed input.
+        Extracts all text and adds placeholders for non-text media.
+        """
+        if isinstance(content, str):
+            return content
+        
+        if not isinstance(content, list):
+            return str(content)
+
+        summary_parts = []
+        for item in content:
+            if isinstance(item, str):
+                summary_parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text":
+                    summary_parts.append(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    source = item.get("media_source", "image")
+                    summary_parts.append(f"[{source.capitalize()}]")
+            elif hasattr(item, "text"):
+                summary_parts.append(item.text)
+            else:
+                summary_parts.append(f"[{type(item).__name__}]")
+        
+        return " ".join(part for part in summary_parts if part).strip()
