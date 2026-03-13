@@ -212,3 +212,9 @@ node_modules/
 chroma_data/
 
 skill_embeddings/
+
+*.sqlite*
+
+generated_image/
+
+generated_video/
