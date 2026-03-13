@@ -12,6 +12,15 @@ import { Cpu, X, Activity, LayoutGrid, Network, RefreshCw } from 'lucide-react';
 import { useUI } from '../context/UIContext';
 import { useRambot } from '../context/RambotContext';
 
+// Vision Components
+import VisionGaze from './VisionGaze';
+import VisionWindow from './VisionWindow';
+
+// Panel Components
+import SettingsPanel from './HUD/SettingsPanel';
+import SkillsPanel from './HUD/SkillsPanel';
+import KnowledgePanel from './HUD/KnowledgePanel';
+
 export default function HUD() {
     // UI State
     const {
