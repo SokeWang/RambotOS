@@ -27,24 +27,28 @@ export default function SettingsPanel() {
     const [isLinking, setIsLinking] = React.useState(false);
 
     React.useEffect(() => {
-        if (window.backendBridge) {
+        const fetchSettings = async () => {
             try {
-                const profileJson = window.backendBridge.get_user_profile();
-                const profile = JSON.parse(profileJson);
-                if (profile) {
+                const profileRes = await fetch("http://127.0.0.1:8000/user/profile");
+                if (profileRes.ok) {
+                    const profile = await profileRes.json();
                     if (profile.email) setUserEmail(profile.email);
                     if (profile.telegram_chat_id) setTelegramId(profile.telegram_chat_id);
                 }
 
-                const sessionsJson = window.backendBridge.get_sessions();
-                setSessions(JSON.parse(sessionsJson) || []);
+                const sessionsRes = await fetch("http://127.0.0.1:8000/session/list");
+                if (sessionsRes.ok) {
+                    const sessionsData = await sessionsRes.json();
+                    setSessions(sessionsData || []);
+                }
             } catch (e) {
-                console.error("Failed to load profile:", e);
+                console.error("Failed to load profile or sessions:", e);
             }
-        }
+        };
+        fetchSettings();
     }, []);
 
-    const handleBindEmail = () => {
+    const handleBindEmail = async () => {
         if (!userEmail || !userEmail.includes('@')) {
             setSaveStatus('error');
             return;
@@ -54,7 +58,12 @@ export default function SettingsPanel() {
         setSaveStatus(null);
 
         try {
-            const success = window.backendBridge.bind_user(userEmail);
+            const res = await fetch("http://127.0.0.1:8000/user/bind", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: userEmail })
+            });
+            const success = res.ok;
             setIsSavingEmail(false);
             setSaveStatus(success ? 'success' : 'error');
 
@@ -67,7 +76,7 @@ export default function SettingsPanel() {
         }
     };
 
-    const handleBindTelegram = () => {
+    const handleBindTelegram = async () => {
         if (!telegramId) {
             setTgSaveStatus('error');
             return;
@@ -77,7 +86,12 @@ export default function SettingsPanel() {
         setTgSaveStatus(null);
 
         try {
-            const success = window.backendBridge.bind_telegram_id(telegramId);
+            const res = await fetch("http://127.0.0.1:8000/user/bind", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegram_chat_id: telegramId })
+            });
+            const success = res.ok;
             setIsSavingTelegram(false);
             setTgSaveStatus(success ? 'success' : 'error');
 
@@ -90,18 +104,29 @@ export default function SettingsPanel() {
         }
     };
 
-    const handleLinkSession = () => {
+    const handleLinkSession = async () => {
         if (!linkTargetSession || !linkIdentifier) return;
 
         setIsLinking(true);
-        const success = window.backendBridge.link_session(linkTargetSession, linkIdentifier);
+        try {
+            const res = await fetch(`http://127.0.0.1:8000/session/link?session_id=${linkTargetSession}&identifier=${linkIdentifier}`, {
+                method: "POST"
+            });
+            const success = res.ok;
 
-        if (success) {
-            const sessionsJson = window.backendBridge.get_sessions();
-            setSessions(JSON.parse(sessionsJson));
-            setLinkIdentifier('');
+            if (success) {
+                const sessionsRes = await fetch("http://127.0.0.1:8000/session/list");
+                if (sessionsRes.ok) {
+                    const sessionsData = await sessionsRes.json();
+                    setSessions(sessionsData);
+                }
+                setLinkIdentifier('');
+            }
+        } catch (e) {
+            console.error("Failed to link session:", e);
+        } finally {
+            setIsLinking(false);
         }
-        setIsLinking(false);
     };
 
     const fileInputRef = useRef(null);

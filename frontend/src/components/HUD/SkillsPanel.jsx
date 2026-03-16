@@ -13,18 +13,18 @@ export default function SkillsPanel() {
     const [currentSkill, setCurrentSkill] = useState(null);
     const [formData, setFormData] = useState({ name: '', description: '' });
 
-    const fetchSkills = useCallback(() => {
+    const fetchSkills = useCallback(async () => {
         setLoading(true);
-        if (window.backendBridge) {
-            window.backendBridge.get_skills((response) => {
-                try {
-                    const data = typeof response === 'string' ? JSON.parse(response) : response;
-                    setSkills(data);
-                } catch (e) {
-                    console.error("Failed to parse skills:", e);
-                }
-                setLoading(false);
-            });
+        try {
+            const response = await fetch('http://127.0.0.1:8000/skills');
+            if (response.ok) {
+                const data = await response.json();
+                setSkills(data);
+            }
+        } catch (e) {
+            console.error("Failed to fetch skills:", e);
+        } finally {
+            setLoading(false);
         }
     }, []);
 
@@ -32,34 +32,46 @@ export default function SkillsPanel() {
         fetchSkills();
     }, [fetchSkills]);
 
-    const handleCreateUpdate = () => {
-        if (!window.backendBridge) return;
-
-        if (currentSkill) {
-            window.backendBridge.update_skill(currentSkill.id, formData.name, formData.description, (success) => {
-                if (success) {
+    const handleCreateUpdate = async () => {
+        try {
+            if (currentSkill) {
+                const response = await fetch(`http://127.0.0.1:8000/skills/${currentSkill.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: formData.name, description: formData.description })
+                });
+                if (response.ok) {
                     fetchSkills();
                     setShowModal(false);
                 }
-            });
-        } else {
-            window.backendBridge.create_skill(formData.name, formData.description, (success) => {
-                if (success) {
+            } else {
+                const response = await fetch('http://127.0.0.1:8000/skills', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: formData.name, description: formData.description })
+                });
+                if (response.ok) {
                     fetchSkills();
                     setShowModal(false);
                 }
-            });
+            }
+        } catch (error) {
+            console.error("Failed to save skill:", error);
         }
     };
 
-    const handleDelete = (skillId) => {
-        if (!window.backendBridge) return;
+    const handleDelete = async (skillId) => {
         if (window.confirm(`Are you sure you want to delete ${skillId}?`)) {
-            window.backendBridge.delete_skill(skillId, (success) => {
-                if (success) {
+            try {
+                const response = await fetch(`http://127.0.0.1:8000/skills/${skillId}`, {
+                    method: 'DELETE'
+                });
+                if (response.ok) {
                     fetchSkills();
                 }
-            });
+            } catch (error) {
+                console.error("Failed to delete skill:", error);
+            }
         }
     };
 

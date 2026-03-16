@@ -1,42 +1,86 @@
-import pymongo
-from motor.motor_asyncio import AsyncIOMotorClient
+import aiosqlite
+import sqlite3
 from loguru import logger
+from config.config import CFG
+import os
+import json
 
-class MongoPool:
-    def __init__(self):
-        self.uri = "mongodb://localhost:27017/"
-        try:
-            # Legacy Sync Client
-            self.client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=2000)
-            self.client.server_info()
-            self.db = self.client["rambot_history"]
+class SQLitePool:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._conn = None
+
+    async def initialize(self):
+        """Initialize the database and create tables if they don't exist."""
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        async with aiosqlite.connect(self.db_path) as db:
+            # User table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    email TEXT UNIQUE,
+                    telegram_chat_id TEXT UNIQUE,
+                    name TEXT,
+                    is_master BOOLEAN
+                )
+            """)
             
-            # Async Motor Client
-            self.async_client = AsyncIOMotorClient(self.uri)
-            self.async_db = self.async_client["rambot_history"]
+            # Sessions table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    name TEXT,
+                    created_at REAL
+                )
+            """)
             
-            logger.info("MongoDB Connection Pool (Sync + Async) initialized.")
-        except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}")
-            self.client = None
-            self.db = None
-            self.async_client = None
-            self.async_db = None
+            # Session links table (for linking multiple identifiers to one session)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS session_links (
+                    session_id TEXT,
+                    identifier TEXT UNIQUE,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+            
+            # Webcam decisions table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS webcam_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL,
+                    user_message TEXT,
+                    context_messages TEXT,
+                    decision BOOLEAN,
+                    model_used TEXT
+                )
+            """)
+            
+            # Tool retrieval logs table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS tool_retrievals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL,
+                    query TEXT,
+                    all_tools TEXT,
+                    selected_tools TEXT,
+                    num_all_tools INTEGER,
+                    num_selected_tools INTEGER,
+                    retrieval_scores TEXT
+                )
+            """)
+            
+            await db.commit()
+            logger.info(f"SQLite database initialized at {self.db_path}")
 
-    def get_collection(self, name):
-        if self.db is not None:
-            return self.db[name]
-        return None
-
-    def get_async_collection(self, name):
-        if self.async_db is not None:
-            return self.async_db[name]
-        return None
+    def get_db(self):
+        """Context manager for obtaining a database connection."""
+        return aiosqlite.connect(self.db_path)
 
 _pool = None
 
-def get_mongo_pool():
+async def get_db_pool():
     global _pool
     if _pool is None:
-        _pool = MongoPool()
+        _pool = SQLitePool(CFG.SQLITE_DB_PATH)
+        await _pool.initialize()
     return _pool

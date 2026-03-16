@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional
 import logging
 import asyncio
+from fastapi.middleware.cors import CORSMiddleware
 import time
 import json
 from collections import deque
@@ -17,12 +18,22 @@ from core.history import History
 from core.memory import MemoryManager, memory_manager
 from services.user_service import user_service, UserService
 from services.session_service import session_service, SessionService
+from services.monitor_manager import monitor_manager
 
 # Configuration
 PORT = 8000
 HOST = "127.0.0.1"
 
 app = FastAPI(title="Rambot Core Service")
+
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Dependency Injection Helpers
 def get_user_service():
@@ -72,6 +83,14 @@ class UserProfile(BaseModel):
     telegram_chat_id: Optional[str] = None
     name: Optional[str] = "Master"
 
+class SkillCreate(BaseModel):
+    name: str
+    description: str
+
+class SkillUpdate(BaseModel):
+    name: str
+    description: str
+
 # In-memory State
 monitors: Dict[str, dict] = {}
 notifications: deque = deque(maxlen=50)  # Auto-capped at 50, O(1) append
@@ -109,7 +128,7 @@ async def register_monitor(reg: MonitorRegister):
 
 @app.get("/monitor/status")
 async def get_all_status():
-    status_list = []
+    status_dict = {}
     now = time.time()
     for name, data in monitors.items():
         # Calculate dynamic status
@@ -121,18 +140,49 @@ async def get_all_status():
         if is_timeout and current_status == "running":
             current_status = "stopped"
             
-        status_list.append(MonitorStatus(
-            name=name,
-            status=current_status,
-            pid=data.get("pid"),
-            last_ping=data["last_ping"],
-            uptime=now - data["start_time"] if current_status == "running" else 0,
-            label=data.get("label"),
-            sublabel=data.get("sublabel"),
-            icon=data.get("icon"),
-            color=data.get("color")
-        ))
-    return status_list
+        status_dict[name] = {
+            "name": name,
+            "status": current_status,
+            "pid": data.get("pid"),
+            "last_ping": data["last_ping"],
+            "uptime": now - data["start_time"] if current_status == "running" else 0,
+            "label": data.get("label"),
+            "sublabel": data.get("sublabel"),
+            "icon": data.get("icon"),
+            "color": data.get("color")
+        }
+        
+    scripts = monitor_manager._discover_scripts()
+    for script_name in scripts:
+        if script_name not in status_dict:
+            status_dict[script_name] = {
+                "name": script_name,
+                "status": "stopped",
+                "label": script_name.capitalize(),
+                "sublabel": f"{script_name.upper()} Service",
+                "uptime": 0
+            }
+            
+    return status_dict
+
+@app.post("/monitor/toggle/{name}")
+async def toggle_monitor_endpoint(name: str, enable: bool):
+    def unregister_callback(n):
+        if n in monitors:
+            monitors[n]["status"] = "stopped"
+            monitors[n]["last_ping"] = 0
+            
+    success = monitor_manager.toggle_monitor(name, enable, unregister_callback)
+    if success:
+        if enable:
+            if name not in monitors:
+                monitors[name] = {"status": "starting", "last_ping": time.time(), "start_time": time.time()}
+            else:
+                monitors[name]["status"] = "running"
+        else:
+            if name in monitors:
+                monitors[name]["status"] = "stopped"
+    return {"status": "success" if success else "failed"}
 
 @app.post("/monitor/ping/{name}")
 async def ping_monitor(name: str):
@@ -271,6 +321,102 @@ async def get_user_profile(user_id: str, user_svc: UserService = Depends(get_use
 async def list_guest_profiles(user_svc: UserService = Depends(get_user_service)):
     """Fetch all guest profiles (everyone except 'master')."""
     return await user_svc.list_guests()
+
+# --- Skill Management ---
+
+def get_skills_dir():
+    import sys, os
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "skills")
+
+@app.get("/skills")
+async def get_skills():
+    import os, re
+    skills_dir = get_skills_dir()
+    if not os.path.exists(skills_dir):
+        return []
+    
+    skills = []
+    for item in os.listdir(skills_dir):
+        path = os.path.join(skills_dir, item)
+        if os.path.isdir(path):
+            skill_md = os.path.join(path, "SKILL.md")
+            skill_data = {"id": item, "name": item, "description": "", "path": path}
+            if os.path.exists(skill_md):
+                try:
+                    with open(skill_md, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        name_match = re.search(r'^name:\s*(.*)$', content, re.MULTILINE)
+                        desc_match = re.search(r'^description:\s*(.*)$', content, re.MULTILINE)
+                        if name_match: skill_data["name"] = name_match.group(1).strip()
+                        if desc_match: skill_data["description"] = desc_match.group(1).strip()
+                except Exception as e:
+                    logger.error(f"Error reading {skill_md}: {e}")
+            skills.append(skill_data)
+    return skills
+
+@app.post("/skills")
+async def create_skill(skill: SkillCreate):
+    import os
+    skills_dir = get_skills_dir()
+    skill_id = skill.name.lower().replace(" ", "-")
+    skill_path = os.path.join(skills_dir, skill_id)
+    if os.path.exists(skill_path):
+        raise HTTPException(status_code=400, detail="Skill already exists")
+    
+    try:
+        os.makedirs(skill_path, exist_ok=True)
+        skill_md_content = f"---\nname: {skill.name}\ndescription: {skill.description}\n---\n\n# {skill.name}\n\n{skill.description}\n"
+        with open(os.path.join(skill_path, "SKILL.md"), 'w', encoding='utf-8') as f:
+            f.write(skill_md_content)
+        return {"status": "success", "id": skill_id}
+    except Exception as e:
+        logger.error(f"Error creating skill: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/skills/{skill_id}")
+async def update_skill(skill_id: str, skill: SkillUpdate):
+    import os, re
+    skills_dir = get_skills_dir()
+    skill_path = os.path.join(skills_dir, skill_id)
+    skill_md = os.path.join(skill_path, "SKILL.md")
+    
+    if not os.path.exists(skill_md):
+        raise HTTPException(status_code=404, detail="Skill not found")
+    
+    try:
+        with open(skill_md, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Update frontmatter
+        content = re.sub(r'^name:.*$', f'name: {skill.name}', content, flags=re.MULTILINE)
+        content = re.sub(r'^description:.*$', f'description: {skill.description}', content, flags=re.MULTILINE)
+        
+        with open(skill_md, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error updating skill: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/skills/{skill_id}")
+async def delete_skill(skill_id: str):
+    import shutil, os
+    skills_dir = get_skills_dir()
+    skill_path = os.path.join(skills_dir, skill_id)
+    
+    if not os.path.exists(skill_path):
+        raise HTTPException(status_code=404, detail="Skill not found")
+    
+    try:
+        shutil.rmtree(skill_path)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error deleting skill: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import sys

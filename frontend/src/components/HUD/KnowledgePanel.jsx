@@ -11,14 +11,18 @@ export default function KnowledgePanel({ viewMode = 'list', refreshNonce = 0 }) 
     const [loading, setLoading] = useState(true);
 
     const fetchMemories = async () => {
-        if (!backend) return;
         setLoading(true);
         try {
-            const raw = await backend.get_long_term_memory();
-            const data = JSON.parse(raw);
-            setMemories(data);
+            const res = await fetch("http://127.0.0.1:8000/memory");
+            if (res.ok) {
+                const data = await res.json();
+                setMemories(data);
+            } else {
+                setMemories([]);
+            }
         } catch (e) {
             console.error("Failed to fetch memories:", e);
+            setMemories([]);
         } finally {
             setLoading(false);
         }
@@ -29,10 +33,13 @@ export default function KnowledgePanel({ viewMode = 'list', refreshNonce = 0 }) 
     }, [backend, refreshNonce]);
 
     const handleDelete = async (id) => {
-        if (!backend) return;
-        const success = await backend.delete_memory(id);
-        if (success) {
-            setMemories(memories.filter(m => m.id !== id));
+        try {
+            const res = await fetch(`http://127.0.0.1:8000/memory/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                setMemories(memories.filter(m => m.id !== id));
+            }
+        } catch (e) {
+            console.error("Failed to delete memory:", e);
         }
     };
 

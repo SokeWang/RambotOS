@@ -83,12 +83,66 @@ export const RambotProvider = ({ children }) => {
         setHasMoreHistory
     );
 
-    const loadMoreHistory = useCallback(() => {
-        if (!hasMoreHistory || !backendProps.backend || !backendProps.backend.requestHistory) return;
+    const loadMoreHistory = useCallback(async () => {
+        if (!hasMoreHistory) return;
         const newOffset = historyOffset + 20;
         setHistoryOffset(newOffset);
-        backendProps.backend.requestHistory(newOffset);
-    }, [hasMoreHistory, historyOffset, backendProps.backend]);
+        
+        try {
+            const res = await fetch(`http://127.0.0.1:8000/history?session_id=os_user&limit=20&offset=${newOffset}`);
+            const messages = await res.json();
+            
+            const formattedMessages = messages.map(msg => {
+                let content = msg.content;
+                let tool_calls = [];
+                let display_text = "";
+                
+                if (msg.role === 'ai') {
+                    const content_list = Array.isArray(content) ? content : [];
+                    let text_content = "";
+                    
+                    for (let item of content_list) {
+                        if (item.type === 'text') {
+                            if (item.text.startsWith('__TOOL_CALLS_METADATA__: ')) {
+                                try {
+                                    tool_calls.push(...JSON.parse(item.text.replace('__TOOL_CALLS_METADATA__: ', '')));
+                                } catch(e) {}
+                            } else {
+                                text_content = item.text;
+                            }
+                        } else if (item.type === 'tool_calls') {
+                            tool_calls.push(...(item.calls || []));
+                        }
+                    }
+                    
+                    if (!text_content && content_list.length > 0) {
+                        text_content = typeof content === 'string' ? content : JSON.stringify(content);
+                    }
+                    
+                    try {
+                        const parsed = JSON.parse(text_content);
+                        display_text = parsed.reply || text_content;
+                    } catch(e) {
+                        display_text = text_content;
+                    }
+                } else {
+                    display_text = content;
+                }
+                
+                return {
+                    type: msg.role,
+                    content: msg.role === 'ai' ? display_text : content,
+                    tool_calls: msg.role === 'ai' ? tool_calls : [],
+                    time: new Date(msg.time)
+                };
+            });
+
+            setChatHistory(prev => [...formattedMessages, ...prev]);
+            if (setHasMoreHistory) setHasMoreHistory(formattedMessages.length === 20);
+        } catch (e) {
+            console.error("Failed to load more history API:", e);
+        }
+    }, [hasMoreHistory, historyOffset, setHasMoreHistory]);
 
     // Save history to localStorage
     useEffect(() => {
@@ -120,8 +174,59 @@ export const RambotProvider = ({ children }) => {
             setShowChatbox(prev => {
                 const newState = !prev;
                 addLog('system', newState ? 'Starting communication module' : 'Closing communication module');
-                if (newState && backendProps.backend && backendProps.backend.requestHistory) {
-                    backendProps.backend.requestHistory(0);
+                if (newState) {
+                    setHistoryOffset(0);
+                    // Fetch top 20
+                    fetch('http://127.0.0.1:8000/history?session_id=os_user&limit=20&offset=0')
+                        .then(res => res.json())
+                        .then(messages => {
+                            const formattedMessages = messages.map(msg => {
+                                let content = msg.content;
+                                let tool_calls = [];
+                                let display_text = "";
+                                
+                                if (msg.role === 'ai') {
+                                    const content_list = Array.isArray(content) ? content : [];
+                                    let text_content = "";
+                                    
+                                    for (let item of content_list) {
+                                        if (item.type === 'text') {
+                                            if (item.text.startsWith('__TOOL_CALLS_METADATA__: ')) {
+                                                try {
+                                                    tool_calls.push(...JSON.parse(item.text.replace('__TOOL_CALLS_METADATA__: ', '')));
+                                                } catch(e) {}
+                                            } else {
+                                                text_content = item.text;
+                                            }
+                                        } else if (item.type === 'tool_calls') {
+                                            tool_calls.push(...(item.calls || []));
+                                        }
+                                    }
+                                    
+                                    if (!text_content && content_list.length > 0) {
+                                        text_content = typeof content === 'string' ? content : JSON.stringify(content);
+                                    }
+                                    
+                                    try {
+                                        const parsed = JSON.parse(text_content);
+                                        display_text = parsed.reply || text_content;
+                                    } catch(e) {
+                                        display_text = text_content;
+                                    }
+                                } else {
+                                    display_text = content;
+                                }
+                                
+                                return {
+                                    type: msg.role,
+                                    content: msg.role === 'ai' ? display_text : content,
+                                    tool_calls: msg.role === 'ai' ? tool_calls : [],
+                                    time: new Date(msg.time)
+                                };
+                            });
+                            setChatHistory(formattedMessages);
+                            if (setHasMoreHistory) setHasMoreHistory(formattedMessages.length === 20);
+                        }).catch(e => console.error(e));
                 }
                 return newState;
             });

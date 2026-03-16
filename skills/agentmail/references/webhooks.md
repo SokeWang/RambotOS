@@ -14,27 +14,9 @@ For local development without a public URL, use [websockets.md](websockets.md) i
 
 Register a webhook endpoint to receive events.
 
-```typescript
-import { AgentMailClient } from "agentmail";
-
-const client = new AgentMailClient({ apiKey: "YOUR_API_KEY" });
-
-// Create webhook
-const webhook = await client.webhooks.create({
-  url: "https://your-server.com/webhooks",
-});
-
-// List webhooks
-const webhooks = await client.webhooks.list();
-
-// Delete webhook
-await client.webhooks.delete({ webhookId: webhook.webhookId });
-```
-
 ```python
 from agentmail import AgentMail
-from config.config import CFG
-client = AgentMail(api_key=CFG.AGENTMAIL_API_KEY)
+client = AgentMail(api_key="YOUR_API_KEY")
 
 # Create webhook
 webhook = client.webhooks.create(url="https://your-server.com/webhooks")
@@ -61,13 +43,6 @@ client.webhooks.delete(webhook_id=webhook.webhook_id)
 ## Event Filtering
 
 Subscribe only to events you need:
-
-```typescript
-const webhook = await client.webhooks.create({
-  url: "https://your-server.com/webhooks",
-  eventTypes: ["message.received", "message.bounced"],
-});
-```
 
 ```python
 webhook = client.webhooks.create(
@@ -116,26 +91,6 @@ Your endpoint should:
 1. Return `200 OK` immediately
 2. Process the payload asynchronously
 
-### Express (TypeScript)
-
-```typescript
-import express from "express";
-
-const app = express();
-app.use(express.json());
-
-app.post("/webhooks", (req, res) => {
-  const payload = req.body;
-
-  if (payload.event_type === "message.received") {
-    // Queue for async processing
-    processEmail(payload.message);
-  }
-
-  res.status(200).send("OK"); // Return immediately
-});
-```
-
 ### Flask (Python)
 
 ```python
@@ -157,40 +112,6 @@ def handle_webhook():
 ## Webhook Verification
 
 Verify webhook signatures to ensure requests are from AgentMail.
-
-### TypeScript
-
-```typescript
-import crypto from "crypto";
-import express from "express";
-
-function verifySignature(
-  payload: Buffer,
-  signature: string,
-  secret: string
-): boolean {
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(payload)
-    .digest("hex");
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-}
-
-app.post("/webhooks", express.raw({ type: "application/json" }), (req, res) => {
-  const signature = req.headers["x-agentmail-signature"];
-  if (typeof signature !== "string") {
-    return res.status(401).send("Missing signature");
-  }
-
-  const payload = req.body;
-  if (!verifySignature(payload, signature, WEBHOOK_SECRET)) {
-    return res.status(401).send("Invalid signature");
-  }
-  const event = JSON.parse(payload.toString("utf8"));
-  // Process event...
-  res.status(200).send("OK");
-});
-```
 
 ### Python
 

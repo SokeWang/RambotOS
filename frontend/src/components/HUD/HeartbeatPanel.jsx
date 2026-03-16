@@ -8,12 +8,13 @@ export default function HeartbeatPanel() {
     const [loading, setLoading] = useState(true);
 
     const fetchStatuses = async () => {
-        if (!backend || !backend.get_monitors_status) return;
         setLoading(true);
         try {
-            const raw = await backend.get_monitors_status();
-            const data = JSON.parse(raw);
-            setStatuses(data);
+            const response = await fetch('http://127.0.0.1:8000/monitor/status');
+            if (response.ok) {
+                const data = await response.json();
+                setStatuses(data);
+            }
         } catch (e) {
             console.error("Failed to fetch heartbeat statuses:", e);
         } finally {
@@ -29,12 +30,22 @@ export default function HeartbeatPanel() {
     }, [backend]);
 
     const handleToggle = async (name, currentRunning) => {
-        if (!backend || !backend.toggle_monitor) return;
         try {
-            const success = await backend.toggle_monitor(name, !currentRunning);
-            if (success) {
+            const url = `http://127.0.0.1:8000/monitor/toggle/${name}?enable=${!currentRunning}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (response.ok) {
                 // Optimistic UI update
-                setStatuses(prev => ({ ...prev, [name]: !currentRunning }));
+                setStatuses(prev => ({ 
+                    ...prev, 
+                    [name]: {
+                        ...prev[name],
+                        status: !currentRunning ? 'running' : 'stopped'
+                    }
+                }));
+                // Real status will update on next poll
             }
         } catch (e) {
             console.error(`Failed to toggle ${name}:`, e);

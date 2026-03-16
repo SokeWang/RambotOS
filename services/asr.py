@@ -1,4 +1,3 @@
-import speech_recognition as sr
 from abc import ABC, abstractmethod
 from loguru import logger
 from utils.exceptions import ASRError
@@ -10,6 +9,7 @@ class ASR(ABC):
 
 class GoogleWebSpeechASR(ASR):
     def __init__(self):
+        import speech_recognition as sr
         self.recognizer = sr.Recognizer()
 
     def transcribe(self, audio_path: str) -> str:

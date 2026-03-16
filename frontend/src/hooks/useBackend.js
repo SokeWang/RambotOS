@@ -173,8 +173,21 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                             };
 
                             audio.play().catch(e => {
-                                console.error("Audio playback failed:", e);
-                                if (backendBridge.set_agent_busy) backendBridge.set_agent_busy(false);
+                                console.warn("Audio autoplay blocked by browser or playback failed:", e.message || e);
+                                
+                                // The browser blocked autoplay. Let's add a global listener to replay on the very next click.
+                                const unlockAudio = () => {
+                                    audio.play().catch(err => console.error("Still failed after unlock:", err));
+                                    if (backendBridge.set_agent_busy) backendBridge.set_agent_busy(false);
+                                    document.removeEventListener('click', unlockAudio);
+                                    document.removeEventListener('keydown', unlockAudio);
+                                };
+                                document.addEventListener('click', unlockAudio);
+                                document.addEventListener('keydown', unlockAudio);
+                                
+                                addLog('system', 'Audio autoplay blocked. Click anywhere to play.');
+                                // Keep agent busy flag until clicked, or optionally free it if you prefer:
+                                // if (backendBridge.set_agent_busy) backendBridge.set_agent_busy(false);
                             });
                         }
                     };
@@ -205,16 +218,79 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                         }
                     };
                     backendBridge.historyLoaded.connect(registeredHandlers.historyLoaded);
-
-                    // Request history immediately after connection
-                    setTimeout(() => {
-                        if (!historyRequested.current) {
-                            console.log("Requesting history...");
-                            backendBridge.requestHistory(0);
-                            historyRequested.current = true;
-                        }
-                    }, 500);
                 }
+
+                // Request history immediately after connection via REST API
+                setTimeout(() => {
+                    if (!historyRequested.current) {
+                        console.log("Requesting history via API...");
+                        historyRequested.current = true;
+                        fetch('http://127.0.0.1:8000/history?session_id=os_user&limit=20&offset=0')
+                            .then(res => res.json())
+                            .then(messages => {
+                                console.log(`Loaded history via API: ${messages.length}`);
+                                // Re-format messages for the frontend
+                                const formattedMessages = messages.map(msg => {
+                                    let content = msg.content;
+                                    let tool_calls = [];
+                                    let display_text = "";
+                                    
+                                    if (msg.role === 'ai') {
+                                        const content_list = Array.isArray(content) ? content : [];
+                                        let text_content = "";
+                                        
+                                        for (let item of content_list) {
+                                            if (item.type === 'text') {
+                                                if (item.text.startsWith('__TOOL_CALLS_METADATA__: ')) {
+                                                    try {
+                                                        tool_calls.push(...JSON.parse(item.text.replace('__TOOL_CALLS_METADATA__: ', '')));
+                                                    } catch(e) {}
+                                                } else {
+                                                    text_content = item.text;
+                                                }
+                                            } else if (item.type === 'tool_calls') {
+                                                tool_calls.push(...(item.calls || []));
+                                            }
+                                        }
+                                        
+                                        if (!text_content && content_list.length > 0) {
+                                            text_content = typeof content === 'string' ? content : JSON.stringify(content);
+                                        }
+                                        
+                                        try {
+                                            const parsed = JSON.parse(text_content);
+                                            display_text = parsed.reply || text_content;
+                                        } catch(e) {
+                                            display_text = text_content;
+                                        }
+                                    } else {
+                                        display_text = content;
+                                    }
+                                    
+                                    return {
+                                        type: msg.role,
+                                        content: msg.role === 'ai' ? display_text : content,
+                                        tool_calls: msg.role === 'ai' ? tool_calls : [],
+                                        time: new Date(msg.time)
+                                    };
+                                });
+
+                                setChatHistory(formattedMessages);
+                                if (setHasMoreHistory) setHasMoreHistory(formattedMessages.length === 20);
+                                addLog('system', `Loaded ${formattedMessages.length} history records`);
+                            })
+                            .catch(err => {
+                                console.error('Failed to fetch history via API:', err);
+                            });
+                    }
+                }, 500);
+
+                // Notify backend that frontend is ready to receive initialization signals
+                setTimeout(() => {
+                    if (backendBridge.frontend_ready) {
+                        backendBridge.frontend_ready();
+                    }
+                }, 800);
 
                 // Handle Develop Mode
                 if (backendBridge.developModeChanged) {

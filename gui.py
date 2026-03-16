@@ -6,22 +6,17 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QUrl
-import threading
 import asyncio
 import time
 import json
-from datetime import datetime
-from config.config import CFG
-from ultron import Ultron
 from loguru import logger
 from services.media_processor import MediaProcessor
 from services.wakeword import WakeWordThread
-from services.monitor_manager import monitor_manager
 from utils.exceptions import ErrorHandler, MediaProcessingError, ASRError
 from utils.concurrency import get_concurrency_manager
 import requests
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite --allow-file-access-from-files"
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite --allow-file-access-from-files --autoplay-policy=no-user-gesture-required"
 from PySide6.QtCore import Qt
 
 def run_gui():
@@ -65,6 +60,11 @@ def run_gui():
         historyLoaded = Signal(str)
         initialized = Signal() # Added for loading animation
         notificationSignal = Signal(str)
+
+        @Slot()
+        def frontend_ready(self):
+            logger.info("Frontend marked as ready, triggering system initialization...")
+            self.initialized.emit()
 
         def __init__(self):
             super().__init__()
@@ -147,7 +147,8 @@ def run_gui():
                 base64_audio = await agent_instance.mouth.generate_base64_audio(text)
                 self.audioGenerated.emit(base64_audio)
             except Exception as e:
-                logger.error(f"Failed to play welcome message: {e}")
+                import traceback
+                logger.error(f"Failed to play welcome message: {e}\n{traceback.format_exc()}")
 
         def _run_agent(self, message, attachment_path="", camera_image="", audio_data=""):
             self.agent_busy = True
@@ -221,7 +222,8 @@ def run_gui():
                                     try:
                                         brain_response = json.loads(line)
                                         reply_text = brain_response.get("reply", "")
-                                        final_reply = reply_text # Update continuously, last one wins
+                                        if reply_text:
+                                            final_reply = reply_text # Last non-empty reply wins
                                         
                                         frontend_payload = {
                                             "text": reply_text,
@@ -297,81 +299,6 @@ def run_gui():
 
         historyLoaded = Signal(str)
 
-        @Slot(int)
-        @Slot()
-        def requestHistory(self, offset=0):
-            if not agent_instance:
-                logger.debug("Agent not ready, cannot get history.")
-                return
-
-            logger.debug(f"Fetching chat history via Gateway (Offset: {offset})...")
-
-            try:
-                resp = requests.get("http://127.0.0.1:8000/history", params={"limit": 20, "offset": offset}, timeout=None)
-                if resp.status_code == 200:
-                    messages = resp.json()
-                else:
-                    logger.error(f"Failed to fetch history: {resp.status_code}")
-                    return
-            except Exception as e:
-                logger.error(f"History Gateway error: {e}")
-                return
-
-            formatted_history = []
-            
-            for msg in messages:
-                # Handle message content
-                content = msg["content"]
-                # If it's a list (Multimodal/Structured), keep it as is. 
-                # The Frontend should handle rendering of [{"type": "text", ...}]
-                # Previous logic flattened it, but User request explicitly wants aligned object storage.
-                if msg["role"] == "ai":
-                    content_list = content if isinstance(content, list) else []
-                    text_content = ""
-                    tool_calls = []
-                    
-                    for item in content_list:
-                        if item.get("type") == "text":
-                            text = item.get("text", "")
-                            if text.startswith("__TOOL_CALLS_METADATA__: "):
-                                try:
-                                    tool_calls_json = text.replace("__TOOL_CALLS_METADATA__: ", "")
-                                    tool_calls.extend(json.loads(tool_calls_json))
-                                except:
-                                    pass
-                            else:
-                                text_content = text
-                        elif item.get("type") == "tool_calls":
-                            # Backward compatibility for the 5 mins this existed
-                            tool_calls.extend(item.get("calls", []))
-                    
-                    if not text_content and content_list:
-                        # Fallback for old simple format
-                        text_content = str(content)
-
-                    try:
-                        # Try to parse as the old JSON format
-                        parsed = json.loads(text_content)
-                        if isinstance(parsed, dict) and "reply" in parsed:
-                            display_text = parsed["reply"]
-                        else:
-                            display_text = text_content
-                    except:
-                        display_text = text_content
-
-                formatted_history.append({
-                    "type": msg["role"],
-                    "content": display_text if msg["role"] == "ai" else content,
-                    "tool_calls": tool_calls if msg["role"] == "ai" else [],
-                    "time": msg["time"]
-                })
-            json_history = json.dumps({
-                "messages": formatted_history,
-                "offset": offset
-            })
-            self.historyLoaded.emit(json_history)
-            logger.debug(f"Sent {len(formatted_history)} historical messages to frontend (Offset: {offset}).")
-
         @Slot()
         def _on_wake_word_detected(self):
             logger.debug("BackendBridge: Wake word signal received from thread.")
@@ -385,213 +312,7 @@ def run_gui():
             # You might also want to trigger a TTS message here
             # self.concurrency_manager.submit_task("notify_speech", lambda: asyncio.run(agent_instance.mouth.generate_base64_audio(message)))
 
-        @Slot(result=str)
-        def get_skills(self):
-            import re
-            import json
-            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
-            if not os.path.exists(skills_dir):
-                return json.dumps([])
-            
-            skills = []
-            for item in os.listdir(skills_dir):
-                path = os.path.join(skills_dir, item)
-                if os.path.isdir(path):
-                    skill_md = os.path.join(path, "SKILL.md")
-                    skill_data = {"id": item, "name": item, "description": "", "path": path}
-                    if os.path.exists(skill_md):
-                        try:
-                            with open(skill_md, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                name_match = re.search(r'^name:\s*(.*)$', content, re.MULTILINE)
-                                desc_match = re.search(r'^description:\s*(.*)$', content, re.MULTILINE)
-                                if name_match: skill_data["name"] = name_match.group(1).strip()
-                                if desc_match: skill_data["description"] = desc_match.group(1).strip()
-                        except Exception as e:
-                            logger.error(f"Error reading {skill_md}: {e}")
-                    skills.append(skill_data)
-            return json.dumps(skills)
 
-        @Slot(str, str, result=bool)
-        def create_skill(self, name, description):
-            import os
-            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
-            skill_id = name.lower().replace(" ", "-")
-            skill_path = os.path.join(skills_dir, skill_id)
-            if os.path.exists(skill_path):
-                return False
-            
-            try:
-                os.makedirs(skill_path, exist_ok=True)
-                skill_md_content = f"--- \nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n{description}\n"
-                with open(os.path.join(skill_path, "SKILL.md"), 'w', encoding='utf-8') as f:
-                    f.write(skill_md_content)
-                return True
-            except Exception as e:
-                logger.error(f"Error creating skill: {e}")
-                return False
-
-        @Slot(str, str, str, result=bool)
-        def update_skill(self, skill_id, name, description):
-            import os
-            import re
-            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
-            skill_path = os.path.join(skills_dir, skill_id)
-            skill_md = os.path.join(skill_path, "SKILL.md")
-            
-            if not os.path.exists(skill_md):
-                return False
-            
-            try:
-                with open(skill_md, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Update frontmatter
-                content = re.sub(r'^name:.*$', f'name: {name}', content, flags=re.MULTILINE)
-                content = re.sub(r'^description:.*$', f'description: {description}', content, flags=re.MULTILINE)
-                
-                with open(skill_md, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                return True
-            except Exception as e:
-                logger.error(f"Error updating skill: {e}")
-                return False
-
-        @Slot(str, result=bool)
-        def delete_skill(self, skill_id):
-            import shutil
-            skills_dir = "/Users/wangpeidong/Documents/RambotOS/skills"
-            skill_path = os.path.join(skills_dir, skill_id)
-            
-            if not os.path.exists(skill_path):
-                return False
-            
-            try:
-                shutil.rmtree(skill_path)
-                return True
-            except Exception as e:
-                logger.error(f"Error deleting skill: {e}")
-                return False
-
-        @Slot(result=str)
-        def get_long_term_memory(self):
-            try:
-                resp = requests.get("http://127.0.0.1:8000/memory", timeout=5)
-                if resp.status_code == 200:
-                    return json.dumps(resp.json())
-                return json.dumps([])
-            except Exception as e:
-                logger.error(f"Error fetching memories via Gateway: {e}")
-                return json.dumps([])
-
-        @Slot(str, result=bool)
-        def delete_memory(self, memory_id):
-            try:
-                resp = requests.delete(f"http://127.0.0.1:8000/memory/{memory_id}", timeout=5)
-                return resp.status_code == 200
-            except Exception as e:
-                logger.error(f"Error deleting memory via Gateway: {e}")
-                return False
-
-        # --- Monitor/Heartbeat Control ---
-        @Slot(str, bool, result=bool)
-        def toggle_monitor(self, service_name, enable):
-            """
-            Toggles a background monitoring service.
-            service_name: 'email', 'whatsapp', etc.
-            enable: True to start, False to stop.
-            """
-            logger.info(f"BackendBridge: toggle_monitor({service_name}, {enable})")
-            return monitor_manager.toggle_monitor(service_name, enable)
-
-        @Slot(result=str)
-        def get_monitors_status(self):
-            """Returns a JSON string of all monitor statuses."""
-            import json
-            return json.dumps(monitor_manager.get_all_statuses())
-
-        @Slot(str, result=bool)
-        def bind_user(self, email):
-            """Binds the master user to an email address via Gateway."""
-            try:
-                resp = requests.post("http://127.0.0.1:8000/user/bind", json={"email": email}, timeout=5)
-                return resp.status_code == 200
-            except Exception as e:
-                logger.error(f"Failed to bind user via Gateway: {e}")
-                return False
-
-        @Slot(str, result=bool)
-        def bind_telegram_id(self, chat_id):
-            """Binds the master user to a Telegram Chat ID via Gateway."""
-            try:
-                resp = requests.post("http://127.0.0.1:8000/user/bind", json={"telegram_chat_id": chat_id}, timeout=5)
-                return resp.status_code == 200
-            except Exception as e:
-                logger.error(f"Failed to bind telegram id via Gateway: {e}")
-                return False
-
-        @Slot(result=str)
-        def get_sessions(self):
-            """Returns a JSON string of all unified sessions."""
-            try:
-                resp = requests.get("http://127.0.0.1:8000/session/list", timeout=5)
-                if resp.status_code == 200:
-                    return json.dumps(resp.json())
-            except Exception as e:
-                logger.error(f"Failed to fetch sessions: {e}")
-            return "[]"
-
-        @Slot(str, str, result=bool)
-        def link_session(self, session_id, identifier):
-            """Links an identifier to an existing session via Gateway."""
-            try:
-                resp = requests.post(
-                    f"http://127.0.0.1:8000/session/link?session_id={session_id}&identifier={identifier}", 
-                    timeout=5
-                )
-                return resp.status_code == 200
-            except Exception as e:
-                logger.error(f"Failed to link session {session_id}: {e}")
-                return False
-
-        @Slot(result=str)
-        def get_guests(self):
-            """Returns a JSON string of all guest profiles."""
-            try:
-                resp = requests.get("http://127.0.0.1:8000/user/guests", timeout=5)
-                if resp.status_code == 200:
-                    return json.dumps(resp.json())
-            except Exception as e:
-                logger.error(f"Failed to fetch guests: {e}")
-            return "[]"
-
-        @Slot(str, str, str, result=bool)
-        def update_guest(self, user_id, name, email_or_tg):
-            """Updates or creates a guest profile."""
-            payload = {"user_id": user_id, "name": name}
-            if email_or_tg.startswith("telegram_"):
-                payload["telegram_chat_id"] = email_or_tg.replace("telegram_", "")
-            else:
-                payload["email"] = email_or_tg
-
-            try:
-                resp = requests.post("http://127.0.0.1:8000/user/bind", json=payload, timeout=5)
-                return resp.status_code == 200
-            except Exception as e:
-                logger.error(f"Failed to update guest {user_id}: {e}")
-                return False
-
-        @Slot(result=str)
-        def get_user_profile(self):
-            """Fetches the current user profile from Gateway."""
-            try:
-                resp = requests.get("http://127.0.0.1:8000/user/profile", timeout=5)
-                if resp.status_code == 200:
-                    return json.dumps(resp.json())
-                return json.dumps({"email": ""})
-            except Exception as e:
-                logger.error(f"Failed to fetch profile via Gateway: {e}")
-                return json.dumps({"email": ""})
 
         # --- Gesture Control ---
         @Slot(float, float)
@@ -691,6 +412,7 @@ def run_gui():
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
     
     page = WebEnginePage(profile, view)
@@ -724,12 +446,10 @@ def run_gui():
         logger.info("Triggering UI Ready Notification...")
         def run_init():
             # In Gateway mode, we don't need to initialize brain here
-            # But we signal frontend that we are ready
-            backend_bridge.initialized.emit() 
+            # The signal will be emitted when the frontend calls frontend_ready()
             
-            # Connect the Service-Oriented MonitorManager to the HUD
-            logger.info("Connecting Service-Oriented MonitorManager...")
-            monitor_manager.notificationReceived.connect(backend_bridge.handle_notification)
+            # (No monitor notifications bridged directly to GUI anymore, frontend pulls directly or uses SSE if needed)
+            pass
             
         backend_bridge.concurrency_manager.submit_task(
             task_id="startup_init",

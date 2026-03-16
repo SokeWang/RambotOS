@@ -14,12 +14,18 @@ CORE_IDENTITY = """You are RAMBOT, a sophisticated AI assistant. Be brief, proac
 # SKILL LAYER (Mandatory Protocol - ~80 tokens)
 # ----------------------------------------------------------------------------
 SKILL_PROTOCOL = """
-## SKILL PROTOCOL:
-Follow this process for tasks requiring specialized skills:
-1. **Retrieve**: Use `retrieve_skills(task)` to find relevant documentation.
-2. **Study**: Use `read(path)` to study the `SKILL.md` of the relevant skill.
-3. **Execute**: Use `exec` for both skill-specific procedures and general system tasks.
-4. **No Script Reading**: You ARE FORBIDDEN from reading source code in `scripts/` directories. Use `SKILL.md` to understand skill usage.
+## SKILL PROTOCOL (CRITICAL):
+You have access to a variety of specialized skills.
+You MUST ALWAYS check if a relevant skill exists before attempting to answer or perform a task yourself.
+
+Available Skill Names: {skills_summary}
+
+Process for tasks:
+1. **Identify**: If the user's request relates to any of the "Available Skill Names", you MUST use `retrieve_skills(task)`.
+2. **Retrieve**: Use `retrieve_skills(task)` to find relevant documentation.
+3. **Study**: Use `read(path)` to study the `SKILL.md` of the relevant skill.
+4. **Execute**: Use `exec` for both skill-specific procedures and general system tasks.
+5. **No Script Reading**: You ARE FORBIDDEN from reading source code in `scripts/` directories. Use `SKILL.md` to understand skill usage.
 """
 
 # ----------------------------------------------------------------------------
@@ -126,9 +132,8 @@ def build_system_prompt(
     prompt_parts = [CORE_IDENTITY, f"Project Root: {CFG.PROJECT_ROOT}"]
     
     if has_skills:
-        prompt_parts.append(SKILL_PROTOCOL)
+        prompt_parts.append(SKILL_PROTOCOL.format(skills_summary=skills_summary))
         # We no longer dump all summaries by default to save tokens and promote the tool-based recall
-        # prompt_parts.append(f"\n## AVAILABLE SKILLS:\n{skills_summary}")
     
     if has_memory:
         prompt_parts.append(MEMORY_PROTOCOL)

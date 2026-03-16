@@ -264,10 +264,14 @@ function ChatPanel({ chatHistory }) {
 
             // Only auto-scroll to bottom if we are NOT in a pagination load
             if (!isPaginationLoadingRef.current && lastScrollHeightRef.current === 0) {
-                const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+                // Increased threshold to 250 for better reliability during streaming
+                const threshold = 250;
+                const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+                
                 const lastMsg = messages[messages.length - 1];
                 const isUserMsg = lastMsg?.type === 'user';
 
+                // Always scroll on user message, or if already near bottom for AI messages
                 if (isNearBottom || isUserMsg) {
                     requestAnimationFrame(() => {
                         container.scrollTo({

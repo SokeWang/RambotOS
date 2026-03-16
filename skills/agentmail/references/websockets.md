@@ -20,79 +20,6 @@ For production with public endpoints, [webhooks.md](webhooks.md) may be simpler.
 | Latency    | HTTP round-trip        | Instant streaming |
 | Firewall   | Must expose port       | Outbound only     |
 
-## TypeScript SDK
-
-### Basic Usage
-
-```typescript
-import { AgentMailClient, AgentMail } from "agentmail";
-
-const client = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY });
-
-async function main() {
-  const socket = await client.websockets.connect();
-
-  socket.on("open", () => {
-    console.log("Connected");
-    socket.sendSubscribe({
-      type: "subscribe",
-      inboxIds: ["agent@agentmail.to"],
-    });
-  });
-
-  socket.on("message", (event: AgentMail.MessageReceivedEvent) => {
-    if (event.type === "message.received") {
-      console.log("From:", event.message.from_);
-      console.log("Subject:", event.message.subject);
-    }
-  });
-
-  socket.on("close", (event) => console.log("Disconnected:", event.code));
-  socket.on("error", (error) => console.error("Error:", error));
-}
-
-main();
-```
-
-### React Hook
-
-```typescript
-import { useEffect, useState } from "react";
-import { AgentMailClient, AgentMail } from "agentmail";
-
-function useAgentMailWebSocket(apiKey: string, inboxIds: string[]) {
-  const [lastMessage, setLastMessage] =
-    useState<AgentMail.MessageReceivedEvent | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-
-  useEffect(() => {
-    const client = new AgentMailClient({ apiKey });
-    let socket: Awaited<ReturnType<typeof client.websockets.connect>>;
-
-    async function connect() {
-      socket = await client.websockets.connect();
-
-      socket.on("open", () => {
-        setIsConnected(true);
-        socket.sendSubscribe({ type: "subscribe", inboxIds });
-      });
-
-      socket.on("message", (event) => {
-        if (event.type === "message.received") {
-          setLastMessage(event);
-        }
-      });
-
-      socket.on("close", () => setIsConnected(false));
-    }
-
-    connect();
-    return () => socket?.close();
-  }, [apiKey, inboxIds.join(",")]);
-
-  return { lastMessage, isConnected };
-}
-```
 
 ## Python SDK
 
@@ -101,8 +28,7 @@ function useAgentMailWebSocket(apiKey: string, inboxIds: string[]) {
 ```python
 from agentmail import AgentMail, Subscribe, Subscribed, MessageReceivedEvent
 
-from config.config import CFG
-client = AgentMail(api_key=CFG.AGENTMAIL_API_KEY)
+client = AgentMail(api_key="YOUR_API_KEY")
 
 with client.websockets.connect() as socket:
     # Subscribe to inboxes
@@ -123,8 +49,7 @@ with client.websockets.connect() as socket:
 import asyncio
 from agentmail import AsyncAgentMail, Subscribe, MessageReceivedEvent
 
-from config.config import CFG
-client = AsyncAgentMail(api_key=CFG.AGENTMAIL_API_KEY)
+client = AsyncAgentMail(api_key="YOUR_API_KEY")
 
 async def main():
     async with client.websockets.connect() as socket:
@@ -143,8 +68,7 @@ asyncio.run(main())
 import threading
 from agentmail import AgentMail, Subscribe, EventType
 
-from config.config import CFG
-client = AgentMail(api_key=CFG.AGENTMAIL_API_KEY)
+client = AgentMail(api_key="YOUR_API_KEY")
 
 with client.websockets.connect() as socket:
     socket.on(EventType.OPEN, lambda _: print("Connected"))
@@ -163,20 +87,6 @@ with client.websockets.connect() as socket:
 ## Subscribe Options
 
 Filter events by inbox, pod, or event type.
-
-```typescript
-socket.sendSubscribe({
-  type: "subscribe",
-  inboxIds: ["agent@agentmail.to"],
-  eventTypes: ["message.received", "message.sent"],
-});
-
-// By pods
-socket.sendSubscribe({
-  type: "subscribe",
-  podIds: ["pod_123", "pod_456"],
-});
-```
 
 ```python
 from agentmail import Subscribe
@@ -225,27 +135,11 @@ The `event.message` object contains:
 
 ## Error Handling
 
-```typescript
-import { AgentMailClient, AgentMailError } from "agentmail";
-
-try {
-  const socket = await client.websockets.connect();
-  // ...
-} catch (err) {
-  if (err instanceof AgentMailError) {
-    console.error(`API error: ${err.statusCode} - ${err.message}`);
-  } else {
-    console.error("Connection error:", err);
-  }
-}
-```
-
 ```python
 from agentmail import AsyncAgentMail, Subscribe, MessageReceivedEvent
 from agentmail.core.api_error import ApiError
 
-from config.config import CFG
-client = AsyncAgentMail(api_key=CFG.AGENTMAIL_API_KEY)
+client = AsyncAgentMail(api_key="YOUR_API_KEY")
 
 async def main():
     try:

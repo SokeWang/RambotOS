@@ -48,6 +48,13 @@ class History:
         
         selected_messages = messages[start_idx:end_idx]
 
+        # 1. Pre-scan for tool results
+        tool_results_map = {}
+        for msg in selected_messages:
+            if isinstance(msg, ToolMessage):
+                tool_results_map[msg.tool_call_id] = str(msg.content)
+
+        # 2. Process messages
         for msg in selected_messages:
             role = None
             if isinstance(msg, HumanMessage):
@@ -59,9 +66,7 @@ class History:
                 if "Returning structured response" in str(msg.content):
                     role = "ai"
                 else:
-                    # Intermediate tool results: we don't show the text but we might want the role 
-                    # if we were merging. For now, we skip but if we want to merge metadata 
-                    # from AIMessage + ToolMessage result, we need to handle it.
+                    # Generic tool results are processed into their AIMessages, skip individual display
                     continue
             elif isinstance(msg, SystemMessage):
                 role = "system"
@@ -102,11 +107,12 @@ class History:
                             text_content = tc["args"]["reply"]
                         continue
                     
+                    call_id = tc.get("id")
                     clean_tool_calls.append({
                         "name": tc.get("name"),
                         "input": str(tc.get("args", "")),
                         "status": "success",
-                        "output": ""
+                        "output": tool_results_map.get(call_id, "")
                     })
             
             # 4. Build content blocks for THIS message

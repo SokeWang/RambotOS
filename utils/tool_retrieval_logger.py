@@ -1,8 +1,9 @@
-from db.db_pool import get_mongo_pool
+from db.db_pool import get_db_pool
 import time
 from typing import List, Dict, Any
 from loguru import logger
-
+import json
+import sqlite3
 
 class ToolRetrievalLogger:
     """
@@ -11,14 +12,13 @@ class ToolRetrievalLogger:
     """
     
     def __init__(self):
-        # 使用连接池
-        self.pool = get_mongo_pool()
-        self.collection = self.pool.get_collection("tool_retrievals")
-        
-        # Create index on timestamp for efficient querying
-        self.collection.create_index("timestamp")
-    
-    def log_retrieval(
+        pass
+
+    async def _get_conn(self):
+        pool = await get_db_pool()
+        return pool.get_db()
+
+    async def log_retrieval(
         self,
         query: str,
         all_tool_names: List[str],
@@ -27,29 +27,29 @@ class ToolRetrievalLogger:
     ) -> None:
         """
         Log a tool retrieval/selection event.
-        
-        Args:
-            query: The user query used for retrieval
-            all_tool_names: List of all available tool names
-            selected_tool_names: List of selected tool names
-            retrieval_scores: Optional dict mapping tool names to similarity scores
         """
-        record = {
-            "timestamp": time.time(),
-            "query": query,
-            "all_tools": all_tool_names,
-            "selected_tools": selected_tool_names,
-            "num_all_tools": len(all_tool_names),
-            "num_selected_tools": len(selected_tool_names),
-            "retrieval_scores": retrieval_scores or {}
-        }
-        
         try:
-            self.collection.insert_one(record)
+            sql = """
+                INSERT INTO tool_retrievals (
+                    timestamp, query, all_tools, selected_tools, 
+                    num_all_tools, num_selected_tools, retrieval_scores
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            all_tools_json = json.dumps(all_tool_names, ensure_ascii=False)
+            selected_tools_json = json.dumps(selected_tool_names, ensure_ascii=False)
+            retrieval_scores_json = json.dumps(retrieval_scores or {}, ensure_ascii=False)
+            
+            async with await self._get_conn() as db:
+                await db.execute(sql, (
+                    time.time(), query, all_tools_json, selected_tools_json,
+                    len(all_tool_names), len(selected_tool_names), retrieval_scores_json
+                ))
+                await db.commit()
         except Exception as e:
             logger.error(f"Failed to log tool retrieval: {e}")
     
-    def get_training_data(
+    async def get_training_data(
         self,
         limit: int = None,
         start_time: float = None,
@@ -57,86 +57,74 @@ class ToolRetrievalLogger:
     ) -> List[Dict[str, Any]]:
         """
         Retrieve logged retrievals for model training.
-        
-        Args:
-            limit: Maximum number of records to return
-            start_time: Unix timestamp to start from
-            end_time: Unix timestamp to end at
-            
-        Returns:
-            List of retrieval records
         """
-        query = {}
+        query = "SELECT timestamp, query, all_tools, selected_tools, num_all_tools, num_selected_tools, retrieval_scores FROM tool_retrievals"
+        params = []
+        where_clauses = []
         
-        if start_time or end_time:
-            query["timestamp"] = {}
-            if start_time:
-                query["timestamp"]["$gte"] = start_time
-            if end_time:
-                query["timestamp"]["$lte"] = end_time
-        
-        cursor = self.collection.find(query, {"_id": 0}).sort("timestamp", 1)
+        if start_time:
+            where_clauses.append("timestamp >= ?")
+            params.append(start_time)
+        if end_time:
+            where_clauses.append("timestamp <= ?")
+            params.append(end_time)
+            
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+            
+        query += " ORDER BY timestamp ASC"
         
         if limit:
-            cursor = cursor.limit(limit)
+            query += " LIMIT ?"
+            params.append(limit)
         
-        return list(cursor)
+        async with await self._get_conn() as db:
+            db.row_factory = sqlite3.Row
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                results = []
+                for row in rows:
+                    record = dict(row)
+                    record["all_tools"] = json.loads(record["all_tools"])
+                    record["selected_tools"] = json.loads(record["selected_tools"])
+                    record["retrieval_scores"] = json.loads(record["retrieval_scores"])
+                    results.append(record)
+                return results
     
-    def get_statistics(self) -> Dict[str, Any]:
+    async def get_statistics(self) -> Dict[str, Any]:
         """
         Get statistics about logged retrievals.
-        
-        Returns:
-            Dictionary with statistics
         """
-        total_count = self.collection.count_documents({})
-        
-        if total_count == 0:
-            return {
-                "total_retrievals": 0,
-                "avg_tools_selected": 0,
-                "avg_selection_rate": 0
-            }
-        
-        # Aggregate statistics
-        pipeline = [
-            {
-                "$group": {
-                    "_id": None,
-                    "avg_selected": {"$avg": "$num_selected_tools"},
-                    "avg_total": {"$avg": "$num_all_tools"}
+        async with await self._get_conn() as db:
+            # Get total count
+            async with db.execute("SELECT COUNT(*) FROM tool_retrievals") as cursor:
+                total_count = (await cursor.fetchone())[0]
+            
+            if total_count == 0:
+                return {
+                    "total_retrievals": 0,
+                    "avg_tools_selected": 0,
+                    "avg_selection_rate": 0
                 }
-            }
-        ]
-        
-        result = list(self.collection.aggregate(pipeline))
-        
-        if result:
-            avg_selected = result[0]["avg_selected"]
-            avg_total = result[0]["avg_total"]
+            
+            # Aggregate statistics
+            async with db.execute("SELECT AVG(num_selected_tools), AVG(num_all_tools) FROM tool_retrievals") as cursor:
+                avg_selected, avg_total = await cursor.fetchone()
+            
             selection_rate = (avg_selected / avg_total * 100) if avg_total > 0 else 0
-        else:
-            avg_selected = 0
-            selection_rate = 0
-        
-        stats = {
-            "total_retrievals": total_count,
-            "avg_tools_selected": round(avg_selected, 2),
-            "avg_selection_rate": round(selection_rate, 2)
-        }
-        
-        return stats
+            
+            stats = {
+                "total_retrievals": total_count,
+                "avg_tools_selected": round(avg_selected, 2),
+                "avg_selection_rate": round(selection_rate, 2)
+            }
+            return stats
     
-    def export_for_training(self, output_file: str = "tool_retrieval_training_data.json") -> None:
+    async def export_for_training(self, output_file: str = "tool_retrieval_training_data.json") -> None:
         """
         Export all data to a JSON file for model training.
-        
-        Args:
-            output_file: Path to output JSON file
         """
-        import json
-        
-        data = self.get_training_data()
+        data = await self.get_training_data()
         
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -144,12 +132,12 @@ class ToolRetrievalLogger:
         logger.info(f"Exported {len(data)} records to {output_file}")
 
 
-if __name__ == "__main__":
+async def test():
     # Test the logger
     logger_instance = ToolRetrievalLogger()
     
     # Log a test retrieval
-    logger_instance.log_retrieval(
+    await logger_instance.log_retrieval(
         query="calculate the square root of 16",
         all_tool_names=["math_tool", "weather_tool", "search_tool", "file_tool"],
         selected_tool_names=["math_tool"],
@@ -157,9 +145,13 @@ if __name__ == "__main__":
     )
     
     # Get statistics
-    stats = logger_instance.get_statistics()
+    stats = await logger_instance.get_statistics()
     print(f"Statistics: {stats}")
     
     # Get training data
-    data = logger_instance.get_training_data(limit=10)
+    data = await logger_instance.get_training_data(limit=10)
     print(f"Retrieved {len(data)} records")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(test())
