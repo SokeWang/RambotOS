@@ -141,7 +141,8 @@ def run_gui():
                 # Emit text for visual feedback
                 self.chatResponse.emit(json.dumps({
                     "text": text,
-                    "webcam_needed": False
+                    "webcam_needed": False,
+                    "is_welcome": True
                 }))
                 # Generate and emit audio
                 base64_audio = await agent_instance.mouth.generate_base64_audio(text)

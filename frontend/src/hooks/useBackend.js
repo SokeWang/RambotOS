@@ -81,36 +81,38 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                             addLog('error', responseText);
                         } else {
                             // Update history with webcam_needed and tool_calls
-                            setChatHistory(prev => {
-                                const currentHistory = Array.isArray(prev) ? prev : [];
-                                const updatedHistory = [...currentHistory];
+                            if (!payload.is_welcome) {
+                                setChatHistory(prev => {
+                                    const currentHistory = Array.isArray(prev) ? prev : [];
+                                    const updatedHistory = [...currentHistory];
 
-                                // Update last user message's webcamNeeded
-                                for (let i = updatedHistory.length - 1; i >= 0; i--) {
-                                    if (updatedHistory[i].type === 'user') {
-                                        updatedHistory[i] = { ...updatedHistory[i], webcamNeeded };
-                                        break;
+                                    // Update last user message's webcamNeeded
+                                    for (let i = updatedHistory.length - 1; i >= 0; i--) {
+                                        if (updatedHistory[i].type === 'user') {
+                                            updatedHistory[i] = { ...updatedHistory[i], webcamNeeded };
+                                            break;
+                                        }
                                     }
-                                }
 
-                                const lastMsg = updatedHistory[updatedHistory.length - 1];
-                                if (lastMsg && lastMsg.type === 'ai') {
-                                    updatedHistory[updatedHistory.length - 1] = {
-                                        ...lastMsg,
-                                        content: structuredContent,
-                                        tool_calls: toolCalls,
-                                        time: new Date()
-                                    };
-                                } else {
-                                    updatedHistory.push({
-                                        type: 'ai',
-                                        content: structuredContent,
-                                        tool_calls: toolCalls,
-                                        time: new Date()
-                                    });
-                                }
-                                return updatedHistory;
-                            });
+                                    const lastMsg = updatedHistory[updatedHistory.length - 1];
+                                    if (lastMsg && lastMsg.type === 'ai') {
+                                        updatedHistory[updatedHistory.length - 1] = {
+                                            ...lastMsg,
+                                            content: structuredContent,
+                                            tool_calls: toolCalls,
+                                            time: new Date()
+                                        };
+                                    } else {
+                                        updatedHistory.push({
+                                            type: 'ai',
+                                            content: structuredContent,
+                                            tool_calls: toolCalls,
+                                            time: new Date()
+                                        });
+                                    }
+                                    return updatedHistory;
+                                });
+                            }
 
                             // Show Subtitle if Chatbox is closed
                             let subtitleText = "";
