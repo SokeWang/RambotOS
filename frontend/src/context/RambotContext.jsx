@@ -352,8 +352,9 @@ export const RambotProvider = ({ children }) => {
                 console.log("System Initialized!");
                 addLog('system', 'Core system initialization complete');
                 setIsSystemReady(true);
-                if (backendProps.backend.say_welcome) {
+                if (backendProps.backend.say_welcome && !sessionStorage.getItem('rambot_welcomed')) {
                     backendProps.backend.say_welcome();
+                    sessionStorage.setItem('rambot_welcomed', 'true');
                 }
             };
 
