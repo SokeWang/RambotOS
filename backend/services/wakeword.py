@@ -3,15 +3,15 @@ import struct
 import pyaudio
 import pvporcupine
 import sys
-from PySide6.QtCore import QThread, Signal
+import threading
 from loguru import logger
 from config.config import CFG
 
-class WakeWordThread(QThread):
-    wakeDetected = Signal()
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
+class WakeWordThread(threading.Thread):
+    def __init__(self, callback=None):
+        super().__init__()
+        self.daemon = True
+        self.callback = callback
         self._running = True
         self._paused = False
         self.access_key = CFG.PICOVOICE_ACCESS_KEY
@@ -72,7 +72,11 @@ class WakeWordThread(QThread):
                         
                         if keyword_index >= 0:
                             logger.info("Wake Word Detected!")
-                            self.wakeDetected.emit()
+                            if self.callback:
+                                try:
+                                    self.callback()
+                                except Exception as cb_err:
+                                    logger.error(f"Error executing wake word callback: {cb_err}")
                             # Auto-pause to prevent multiple triggers
                             self._paused = True 
                     except (IOError, struct.error) as e:

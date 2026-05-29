@@ -121,23 +121,16 @@ def main():
     tg_proc = start_telegram()
     email_proc = start_email()
 
-    # 3. Start GUI or wait in foreground
-    no_gui = ("--no-gui" in sys.argv or "--backend" in sys.argv)
-    
+    # 3. Wait in foreground and maintain backend service suite
     try:
-        if no_gui:
-            logger.info("=============================================================")
-            logger.info("🌌 Rambot Backend Services are running in Headless Dev Mode.")
-            logger.info("👉 Direct console logs will output above.")
-            logger.info("👉 You can now run 'npm run dev' inside the 'frontend/' folder.")
-            logger.info("👉 Press Ctrl+C in this terminal to gracefully terminate all services.")
-            logger.info("=============================================================")
-            while True:
-                time.sleep(1)
-        else:
-            logger.info("Launching Rambot OS GUI...")
-            from gui import run_gui
-            exit_code = run_gui()
+        logger.info("=============================================================")
+        logger.info("🌌 Rambot Backend Services are running in Headless Dev Mode.")
+        logger.info("👉 Direct console logs will output above.")
+        logger.info("👉 You can now run 'npm run dev' inside the 'frontend/' folder.")
+        logger.info("👉 Press Ctrl+C in this terminal to gracefully terminate all services.")
+        logger.info("=============================================================")
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt detected. Terminating backend services...")
     except Exception as e:
@@ -178,69 +171,9 @@ if __name__ == "__main__":
     
     # 0. Set environment variables for packaging
     if getattr(sys, 'frozen', False):
-        # If running as a bundle (PyInstaller)
         os.chdir(sys._MEIPASS)
         sys.path.append(sys._MEIPASS)
         logger.info(f"Running in frozen mode. MEIPASS: {sys._MEIPASS}")
-        
-        # QtWebEngine helper path configuration
-        # Expected path in BUNDLE (macOS)
-        # Search for QtWebEngineProcess in several potential bundle locations
-        possible_helper_paths = [
-            # Standard helper path in Mac bundle structure
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "lib", "QtWebEngineCore.framework", "Helpers", "QtWebEngineProcess.app", "Contents", "MacOS", "QtWebEngineProcess"),
-            # Common relocated path in PyInstaller/PySide6.5+ bundles
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "lib", "QtWebEngineCore.framework", "Versions", "Resources", "Helpers", "QtWebEngineProcess.app", "Contents", "MacOS", "QtWebEngineProcess"),
-            # Another common relocated path
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "lib", "QtWebEngineCore.framework", "Versions", "Current", "Helpers", "QtWebEngineProcess.app", "Contents", "MacOS", "QtWebEngineProcess"),
-            # Root MacOS folder fallback
-            os.path.join(os.path.dirname(sys.executable), "QtWebEngineProcess")
-        ]
-        
-        found_helper = False
-        for helper_path in possible_helper_paths:
-            if os.path.exists(helper_path):
-                os.environ["QTWEBENGINEPROCESS_PATH"] = helper_path
-                logger.info(f"Set QTWEBENGINEPROCESS_PATH to: {helper_path}")
-                found_helper = True
-                break
-        
-        if not found_helper:
-            logger.warning("Could not locate QtWebEngineProcess in any of the standard bundle paths.")
-
-        # QtWebEngine resources path configuration (pak files etc.)
-        possible_resource_paths = [
-            # Standard location (where it should be)
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "lib", "QtWebEngineCore.framework", "Resources"),
-            # Common relocated path found in previous build
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "lib", "QtWebEngineCore.framework", "Versions", "Resources", "Resources"),
-            # Another variation
-            os.path.join(sys._MEIPASS, "PySide6", "Qt", "resources"),
-            # Root MacOS folder fallback
-            os.path.dirname(sys.executable)
-        ]
-        
-        found_resources = False
-        for res_path in possible_resource_paths:
-            # Check for a signature file like qtwebengine_resources.pak
-            if os.path.exists(os.path.join(res_path, "qtwebengine_resources.pak")):
-                os.environ["QTWEBENGINE_RESOURCES_PATH"] = res_path
-                logger.info(f"Set QTWEBENGINE_RESOURCES_PATH to: {res_path}")
-                
-                # Also set ICU data path if icudtl.dat is present
-                if os.path.exists(os.path.join(res_path, "icudtl.dat")):
-                    os.environ["QTWEBENGINE_ICU_DATA_DIR"] = res_path
-                    logger.info(f"Set QTWEBENGINE_ICU_DATA_DIR to: {res_path}")
-                
-                found_resources = True
-                break
-        
-        if not found_resources:
-            logger.warning("Could not locate QtWebEngine resources in any of the standard bundle paths.")
-
-        # Disable sandbox for dev/unsigned builds on macOS
-        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-        logger.info("Deactivated QtWebEngine Sandbox for development bundle.")
     
     # Check command line arguments for dispatcher
     if len(sys.argv) > 1:
