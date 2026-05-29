@@ -101,6 +101,12 @@ class StandaloneTelegram:
         self.remove_pid_file()
         logger.info("TelegramMonitor: Standalone process exited.")
 
-if __name__ == "__main__":
+def main():
     monitor = StandaloneTelegram()
-    asyncio.run(monitor.run())
+    try:
+        asyncio.run(monitor.run())
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    main()

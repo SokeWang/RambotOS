@@ -21,7 +21,9 @@ class MemoryManager:
             os.makedirs(db_path, exist_ok=True)
             
         try:
-            self.client = chromadb.PersistentClient(path=db_path)
+            # Explicitly disable telemetry to avoid dynamic import issues in PyInstaller (posthog error)
+            settings = Settings(anonymized_telemetry=False)
+            self.client = chromadb.PersistentClient(path=db_path, settings=settings)
             # Get or create the collection
             self.collection = self.client.get_or_create_collection(name=collection_name)
             

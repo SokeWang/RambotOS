@@ -79,6 +79,32 @@ class MonitorService:
         else:
             return self.stop_monitor(name, unregister_callback)
 
+    def get_all_statuses(self):
+        """Discovers all monitor services and returns their active status."""
+        statuses = {}
+        scripts = self._discover_scripts()
+        for name in scripts:
+            is_running = False
+            # Check active subprocess
+            if name in self.processes:
+                if self.processes[name].poll() is None:
+                    is_running = True
+            
+            # Fallback: check PID file
+            if not is_running:
+                pid_file = f"/tmp/rambot_{name}_monitor.pid"
+                if os.path.exists(pid_file):
+                    try:
+                        with open(pid_file, 'r') as f:
+                            pid = int(f.read().strip())
+                        os.kill(pid, 0)  # Check if process exists in OS
+                        is_running = True
+                    except:
+                        pass
+            
+            statuses[name] = is_running
+        return statuses
+
     def cleanup(self):
         for name in list(self.processes.keys()):
             self.stop_monitor(name)

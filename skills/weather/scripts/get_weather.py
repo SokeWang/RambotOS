@@ -30,11 +30,37 @@ def get_weather(location):
         print(f"Pressure: {pressure} hPa")
         print(f"Precipitation: {precip} mm")
         
+        if 'weather' in data:
+            print(f"\n3-Day Forecast for {location}:")
+            for day in data['weather']:
+                date = day.get('date', '')
+                maxtemp = day.get('maxtempC', '')
+                mintemp = day.get('mintempC', '')
+                condition = "Unknown"
+                if 'hourly' in day and len(day['hourly']) > 4:
+                     condition = day['hourly'][4]['weatherDesc'][0]['value']
+                print(f" - Date: {date}, Condition: {condition}, High: {maxtemp}°C, Low: {mintemp}°C")
+                
     except Exception as e:
         print(f"Error fetching weather: {e}")
 
+def get_ip_location():
+    try:
+        response = requests.get("http://ip-api.com/json/")
+        if response.status_code == 200:
+            data = response.json()
+            if data["status"] == "success":
+                return data["city"]
+    except Exception as e:
+        pass
+    return None
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python get_weather.py <location>")
+        loc = get_ip_location()
+        if loc:
+            get_weather(loc)
+        else:
+            print("Usage: python get_weather.py <location>")
     else:
         get_weather(" ".join(sys.argv[1:]))

@@ -47,41 +47,22 @@ export const UIProvider = ({ children }) => {
     // Geolocation State
     const [userLocation, setUserLocation] = useState(null);
 
-    // Watch Geolocation
+    // Watch for Native Location Updates from Python
     useEffect(() => {
-        if (!navigator.geolocation) {
-            console.warn("Geolocation is not supported by this browser.");
-            return;
+        const handleNativeLocation = (e) => {
+            const { lat, lng } = e.detail;
+            console.log("Geolocation: Native CoreLocation fix obtained!", lat, lng);
+            setUserLocation({ lat, lng });
+        };
+        window.addEventListener('NativeLocationUpdate', handleNativeLocation);
+        return () => window.removeEventListener('NativeLocationUpdate', handleNativeLocation);
+    }, []);
+
+    const requestNativeLocation = useCallback((timeout = 30.0) => {
+        console.log("UIContext: requestNativeLocation triggered.");
+        if (window.backendBridge && window.backendBridge.startNativeLocation) {
+            window.backendBridge.startNativeLocation(timeout);
         }
-
-        // Try getting initial position immediately
-        navigator.geolocation.getCurrentPosition(
-            (position) => {
-                const { latitude, longitude } = position.coords;
-                console.log("Geolocation: Initial position fix:", latitude, longitude);
-                setUserLocation({ lat: latitude, lng: longitude });
-            },
-            (error) => console.warn("Geolocation: Initial fix failed:", error.message),
-            { enableHighAccuracy: true, timeout: 10000 }
-        );
-
-        const watchId = navigator.geolocation.watchPosition(
-            (position) => {
-                const { latitude, longitude } = position.coords;
-                console.log("Geolocation: Updated position:", latitude, longitude);
-                setUserLocation({ lat: latitude, lng: longitude });
-            },
-            (error) => {
-                console.warn("Geolocation: Error tracking position:", error.message);
-            },
-            {
-                enableHighAccuracy: true,
-                timeout: 5000,
-                maximumAge: 0
-            }
-        );
-
-        return () => navigator.geolocation.clearWatch(watchId);
     }, []);
 
     // Persistence
@@ -157,14 +138,14 @@ export const UIProvider = ({ children }) => {
         genUISchema, setGenUISchema,
         showAppLauncher, setShowAppLauncher,
         genUIEnabled, setGenUIEnabled,
-        userLocation
+        userLocation, requestNativeLocation
     }), [
         showChatbox, showCameraSelector,
         processingStep, subtitle, isSubtitleFading,
         cursorMode, windowMode, isSystemReady,
         showCameraBackground, wallpaper, activeApp,
         genUISchema, showAppLauncher, genUIEnabled,
-        userLocation
+        userLocation, requestNativeLocation
     ]);
 
     return (

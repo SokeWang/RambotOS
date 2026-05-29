@@ -17,21 +17,18 @@ Create a new project workspace to isolate environment and assets.
 python scripts/initialize_project.py --name <project_name>
 ```
 
-### 2. Research & Design
+### 2. Research & Design (Approval Required)
 1. **Research**: Conduct thorough research on SOTA methods, papers, and existing implementations (using `web_search`).
-2. **Document Research**: Generate `projects/<project_name>/Research.md` summarising the findings and proposed approach.
+2. **Report**: Generate `projects/<project_name>/Research.md` and present the findings and detailed implementation plan to the user.
+3. **Approval**: Wait for user confirmation before proceeding with development.
 
-### 3. Implementation Planning
-1. **Plan**: Based on `Research.md`, create a detailed technical plan.
-2. **Document Plan**: Generate `projects/<project_name>/Implementation Plan.md` outlining scripts, dependencies, and verification steps.
-
-### 4. Progressive Implementation
-Implement the project following the `Implementation Plan.md`:
+### 3. Implementation
+Once the plan is approved, proceed with the implementation:
 1. **Data Acquisition**: Fetch or generate data using `scripts/data_utils.py` or project-specific `src/collect_data.py`.
 2. **Core Logic**: Implement model architecture and training loops in `src/train.py`.
 3. **Evaluation**: Implement metrics and testing in `src/test.py`.
 
-### 5. Orchestrated Iteration
+### 4. Orchestrated Iteration
 Run the orchestrator to manage and optimize the implementation loop.
 ```bash
 python scripts/orchestrator.py --project projects/<project_name> --task "<task_description>" --target <metric>

@@ -103,6 +103,13 @@ async def startup_event():
     logger.info("Core: Initializing central LangchainBrain...")
     await brain.initialize()
     logger.info("Core: Central brain is ready.")
+    
+    try:
+        from services.scheduler_service import scheduler_service
+        scheduler_service.start()
+        logger.info("Core: Background Scheduler Service started successfully.")
+    except Exception as e:
+        logger.error(f"Core: Failed to start Scheduler Service: {e}")
 
 @app.get("/")
 async def root():

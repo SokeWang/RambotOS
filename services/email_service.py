@@ -5,8 +5,6 @@ import os
 import shlex
 from typing import Any
 from loguru import logger
-from typing import Any
-from loguru import logger
 from config.config import CFG
 from agentmail import AgentMail
 from agentmail.core.api_error import ApiError
@@ -120,10 +118,16 @@ class EmailService:
                         logger.error(f"EmailService: Gateway error {resp.status_code}")
                         continue
                         
-                    brain_response = resp.json()
+                    # Split NDJSON lines and parse the last complete JSON update
+                    lines = [line.strip() for line in resp.text.split('\n') if line.strip()]
+                    if not lines:
+                        logger.warning(f"EmailService: Empty response from Gateway for {msg_id}")
+                        continue
+                    
+                    brain_response = json.loads(lines[-1])
                     reply_body = brain_response.get("reply")
                 except Exception as e:
-                    logger.error(f"EmailService: Failed to contact Gateway: {e}")
+                    logger.error(f"EmailService: Failed to contact Gateway or parse response: {e}")
                     reply_body = "I'm sorry, I'm having trouble connecting to my central brain right now."
                     continue
 
@@ -160,3 +164,26 @@ class EmailService:
 
         except Exception as e:
             logger.error(f"EmailService: Error in check_and_reply: {e}")
+
+    async def send_email(self, to: str, subject: str, text: str, html: str = None):
+        """
+        Sends an email using AgentMail.
+        """
+        if not self.client or not self.inbox_id:
+            logger.error("EmailService: Client or inbox_id not configured. Cannot send email.")
+            return False
+
+        try:
+            logger.info(f"EmailService: Sending email to {to} with subject '{subject}'")
+            self.client.inboxes.messages.send(
+                inbox_id=self.inbox_id,
+                to=[to],
+                subject=subject,
+                text=text,
+                html=html
+            )
+            logger.info("EmailService: Email sent successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"EmailService: Failed to send email: {e}")
+            return False

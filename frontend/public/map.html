@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Rambot Navigation Map</title>
+    <style>
+        html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #18181b; }
+        /* Hide cluttered UI elements */
+        .gm-style-cc, .gm-style-mtk, .gm-svpc { display: none !important; }
+        
+        /* Custom Location Button Style */
+        .custom-control-container { margin: 15px; }
+        .location-btn {
+            background-color: rgba(24, 24, 27, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(8px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .location-btn:hover { background-color: rgba(24, 24, 27, 1); border-color: rgba(34, 211, 238, 0.5); }
+        .location-btn svg { width: 20px; height: 20px; color: #22d3ee; }
+
+        /* Pulsing Blue Dot */
+        .dot-container { position: relative; width: 20px; height: 20px; }
+        .dot { 
+            position: absolute; width: 12px; height: 12px; 
+            background: #22d3ee; border: 2px solid white; 
+            border-radius: 50%; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%); z-index: 2;
+            box-shadow: 0 0 10px rgba(34, 211, 238, 0.8);
+        }
+        .pulse {
+            position: absolute; width: 12px; height: 12px;
+            background: rgba(34, 211, 238, 0.4);
+            border-radius: 50%; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); z-index: 1;
+            animation: pulse-ring 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.8; }
+            100% { transform: translate(-50%, -50%) scale(3.5); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const googleKey = urlParams.get('key');
+    const zoom = parseInt(urlParams.get('zoom') || '14');
+        const originStr = urlParams.get('origin');
+        const destStr = urlParams.get('dest');
+
+        const parseParam = (str) => {
+            if (!str) return null;
+            try { return JSON.parse(str); } catch(e) { return str; }
+        };
+
+        const origin = parseParam(originStr);
+        const destination = parseParam(destStr);
+        let userLat = urlParams.get('user_lat');
+        let userLng = urlParams.get('user_lng');
+
+        let map, userMarker;
+
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'UPDATE_LOCATION') {
+                userLat = event.data.lat;
+                userLng = event.data.lng;
+                const coords = { lat: parseFloat(userLat), lng: parseFloat(userLng) };
+                if (map) {
+                    updateUserMarker(coords);
+                    // Optionally center map on first fix if no explicit dest/origin
+                    if (!destStr && !originStr && !window.hasCenteredMapOnce) {
+                        map.setCenter(coords);
+                        window.hasCenteredMapOnce = true;
+                    }
+                }
+            }
+        });
+        
+        // Request the location in case the parent already has it but sent it before we were listening
+        window.parent.postMessage({ type: 'REQUEST_LOCATION' }, '*');
+
+    function createLocationButton(map) {
+        const controlDiv = document.createElement("div");
+        controlDiv.className = "custom-control-container";
+        
+        const controlUI = document.createElement("div");
+        controlUI.className = "location-btn";
+        controlUI.title = "Center on my location";
+        controlUI.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
+        
+        controlDiv.appendChild(controlUI);
+        controlUI.addEventListener("click", () => {
+            if (userLat && userLng) {
+                const coords = { lat: parseFloat(userLat), lng: parseFloat(userLng) };
+                map.panTo(coords);
+                map.setZoom(16);
+                updateUserMarker(coords);
+            } else if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((pos) => {
+                    const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    map.panTo(coords);
+                    map.setZoom(16);
+                    updateUserMarker(coords);
+                });
+            }
+        });
+        map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(controlDiv);
+    }
+
+    function updateUserMarker(coords) {
+        if (!userMarker) {
+            const dotDiv = document.createElement('div');
+            dotDiv.className = 'dot-container';
+            dotDiv.innerHTML = '<div class="pulse"></div><div class="dot"></div>';
+            
+            userMarker = new google.maps.OverlayView();
+            userMarker.onAdd = function() {
+                const layer = this.getPanes().overlayMouseTarget;
+                layer.appendChild(dotDiv);
+            };
+            userMarker.draw = function() {
+                const projection = this.getProjection();
+                const position = projection.fromLatLngToDivPixel(new google.maps.LatLng(coords.lat, coords.lng));
+                if (position) {
+                    dotDiv.style.left = position.x + 'px';
+                    dotDiv.style.top = position.y + 'px';
+                    dotDiv.style.position = 'absolute';
+                }
+            };
+            userMarker.setMap(map);
+        } else {
+            userMarker.draw();
+        }
+    }
+
+    function initMap() {
+        const nightStyle = [
+            { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
+            { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
+            { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
+            { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+            { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+            { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#263c3f" }] },
+            { featureType: "poi.park", elementType: "labels.text.fill", stylers: [{ color: "#6b9a76" }] },
+            { featureType: "road", elementType: "geometry", stylers: [{ color: "#38414e" }] },
+            { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#212a37" }] },
+            { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#9ca5b3" }] },
+            { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#746855" }] },
+            { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#1f2835" }] },
+            { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#f3d19c" }] },
+            { featureType: "transit", elementType: "geometry", stylers: [{ color: "#2f3948" }] },
+            { featureType: "transit.station", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+            { featureType: "water", elementType: "geometry", stylers: [{ color: "#17263c" }] },
+            { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#515c6d" }] },
+            { featureType: "water", elementType: "labels.text.stroke", stylers: [{ color: "#17263c" }] },
+        ];
+
+        map = new google.maps.Map(document.getElementById("map"), {
+            zoom: zoom,
+            center: { lat: 0, lng: 0 },
+            styles: nightStyle,
+            disableDefaultUI: true,
+            zoomControl: true,
+            gestureHandling: 'greedy'
+        });
+        
+        createLocationButton(map);
+
+        if (originStr && destStr) {
+            const directionsService = new google.maps.DirectionsService();
+            const directionsRenderer = new google.maps.DirectionsRenderer({
+                map: map,
+                polylineOptions: { strokeColor: "#22d3ee", strokeWeight: 6, strokeOpacity: 0.8 }
+            });
+            directionsService.route({
+                origin: originStr,
+                destination: destStr,
+                travelMode: google.maps.TravelMode.DRIVING,
+            }, (result, status) => {
+                if (status === "OK") directionsRenderer.setDirections(result);
+            });
+        } else if (destStr) {
+            const geocoder = new google.maps.Geocoder();
+            geocoder.geocode({ address: destStr }, (results, status) => {
+                if (status === "OK") {
+                    map.setCenter(results[0].geometry.location);
+                    new google.maps.Marker({ position: results[0].geometry.location, map: map });
+                }
+            });
+        }
+
+        if (userLat && userLng) {
+            const coords = { lat: parseFloat(userLat), lng: parseFloat(userLng) };
+            if (!destStr && !originStr) map.setCenter(coords);
+            updateUserMarker(coords);
+        } else if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition((pos) => {
+                const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                if (!destStr && !originStr) map.setCenter(coords);
+                updateUserMarker(coords);
+            });
+        }
+    }
+
+    if (googleKey) {
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${googleKey}&callback=initMap`;
+        script.async = true;
+        document.head.appendChild(script);
+    }
+</script>
+</body>
+</html>

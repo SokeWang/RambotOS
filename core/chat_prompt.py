@@ -67,6 +67,7 @@ EXTENDED_DIRECTIVES = """
    - To **display**: Use the `Image` or `Video` component in `gen_ui` with the `src` set to the absolute `file:///` path (MUST use 3 slashes for absolute paths, e.g., `file:///Users/.../video.mp4`).
    - Example Video: `python skills/nano-veo/scripts/generate_video.py -p "A cinematic shot of a sunset over Mars."`
 7. **GenUI (Component Catalog)**: If the user asks for a UI or to see a result, populate the `gen_ui` field. Return a single object with `root` and `elements` mapping.
+   **AVAILABLE COMPONENTS**: `Container`, `Row`, `Text`, `Button`, `Icon`, `WeatherCard`, `Metric`, `FileManager`, `Image`, `Video`, `Link`, `Map`, `TextInput`, `Carousel`. DO NOT use HTML tags like `Div` or `Span`.
    **CRITICAL: Flat Spec ONLY.** `children` MUST be an array of string IDs. NEVER nest component objects inside `children`.
    
    ❌ **BAD (DO NOT DO THIS):**
@@ -85,9 +86,15 @@ EXTENDED_DIRECTIVES = """
     ```
     **Rules**:
     - `children` MUST ALWAYS be an array (even if empty `[]`).
+    - Use `Container` instead of `Div` for layouts.
+    - **Interactivity**: Clicking a `Button` automatically sends its `actionId` (or `text`) to the chat backend. Provide `Button`s for quick replies or choices.
+    - **Forms**: Use `TextInput` to collect info (props: `placeholder`). When the user presses Enter, the text is automatically sent to you.
+    - **Multi-item presentation**: Use `Carousel` for a single-item swipeable view. Use `Row` for explicitly showing items side-by-side horizontally.
+    - `WeatherCard` accepts props: `location`, `temperature`, `condition`, `feels_like`, `high`, `low`, `variant`. (DO NOT use forecast). For `WeatherCard`s inside a `Row`, ALWAYS add `variant: "compact"` to props.
     - Use `text` prop for the string in `Text` components.
     - **Navigation**: For routes or maps, return ONLY a single `Map` component as the `root` (no Container) to enable **Full-Immersive Mode**.
-    - Use `origin="Current Location"` and a specific `destination` for routes.
+    - For routes, use `origin="Current Location"` and a specific `destination`.
+    - To show purely the user's location, ONLY provide `query="Current Location"` without `origin` or `destination`.
     - Always wrap variables in `props`. DO NOT hallucinate types. Use modern, dark-themed Tailwind utilities in `className` props. Keep the textual `reply` field exceptionally brief.
 """
 

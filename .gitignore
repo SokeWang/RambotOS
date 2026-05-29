@@ -218,3 +218,10 @@ skill_embeddings/
 generated_image/
 
 generated_video/
+
+# Local custom folders & personal files
+.DS_Store
+**/.DS_Store
+projects/
+cover_letter.html
+skills/algorithm-engineer/projects/

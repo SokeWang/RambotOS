@@ -57,8 +57,6 @@ class LangchainBrain(BaseAgent):
         )
             
         self.long_term_memory = MemoryManager()
-        
-        self.long_term_memory = MemoryManager()
         self._init_lock = asyncio.Lock()
         self._cached_prompt: dict[str, str] = {}
         self._cached_name: str = ""

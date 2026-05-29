@@ -15,8 +15,10 @@ from services.wakeword import WakeWordThread
 from utils.exceptions import ErrorHandler, MediaProcessingError, ASRError
 from utils.concurrency import get_concurrency_manager
 import requests
+from PySide6.QtCore import QTimer
+from services.location_service import start_location_service, get_cached_location
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite --allow-file-access-from-files --autoplay-policy=no-user-gesture-required"
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-features=SkiaGraphite --allow-file-access-from-files --autoplay-policy=no-user-gesture-required --enable-features=Geolocation --unsafely-treat-insecure-origin-as-secure=file://*"
 from PySide6.QtCore import Qt
 
 def run_gui():
@@ -71,12 +73,33 @@ def run_gui():
             self.view = None # Will be set later
             self.wake_word_thread = None
             self.email_monitor_thread = None
-            # Initialize concurrency control manager
+            # Concurrency manager initialization
             self.concurrency_manager = get_concurrency_manager(max_workers=2, max_queue_size=10)
             self.current_task_id = 0
             self.agent_busy = False
             self.is_listening = False
+            
+            # Initialize (but don't start) location timer
+            self.location_timer = QTimer()
+            self.location_timer.timeout.connect(self._poll_location)
+            self.location_timer.setSingleShot(False)
 
+        @Slot(float)
+        def startNativeLocation(self, timeout=30.0):
+            logger.info(f"BackendBridge: On-demand location request received (timeout={timeout})")
+            start_location_service(timeout)
+            if not self.location_timer.isActive():
+                self.location_timer.start(2000)
+
+        def _poll_location(self):
+            if not self.view or not self.view.page():
+                return
+            loc = get_cached_location()
+            if loc:
+                logger.info(f"BackendBridge: Sending location to frontend: {loc}")
+                js = f"window.dispatchEvent(new CustomEvent('NativeLocationUpdate', {{detail: {json.dumps(loc)}}}));"
+                self.view.page().runJavaScript(js)
+                self.location_timer.stop() # Only need one good fix per request
         @Slot()
         def select_file(self):
             logger.info("Opening file dialog...")
@@ -482,12 +505,25 @@ def run_gui():
     index_path = "file://" + os.path.join(current_dir, "frontend", "dist", "index.html")
     view.load(QUrl(index_path))
     
-    # Handle permissions (Camera, Microphone)
+    # Handle permissions (Camera, Microphone, Geolocation)
     def handle_permission_request(permission):
-        logger.debug(f"Permission requested: {permission.permissionType()}")
+        p_type = permission.permissionType()
+        logger.info(f"System Permission Requested: {p_type}")
+        
+        # In PySide6, Geolocation is often handled via featurePermissionRequested
+        # but permissionRequested is also used in newer versions.
         permission.grant()
+        logger.info(f"System Permission Granted: {p_type}")
 
     view.page().permissionRequested.connect(handle_permission_request)
+    
+    # Also handle Geolocation explicitly for older/other patterns
+    def handle_feature_permission(url, feature):
+        logger.info(f"Feature Permission Requested for {url}: {feature}")
+        view.page().setFeaturePermission(url, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
+        logger.info(f"Feature Permission Granted: {feature}")
+
+    view.page().featurePermissionRequested.connect(handle_feature_permission)
 
     view.showMaximized()
 
@@ -518,7 +554,8 @@ def run_gui():
 
         # Stop all heartbeats/monitors and bridge via MonitorManager
         logger.info("Cleaning up Service Monitors...")
-        monitor_manager.cleanup()
+        if 'monitor_manager' in globals():
+            monitor_manager.cleanup()
 
     app.aboutToQuit.connect(cleanup) # app needs to be defined (QApplication instance)
 

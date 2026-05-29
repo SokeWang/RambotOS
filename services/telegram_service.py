@@ -57,8 +57,14 @@ class TelegramService:
         try:
             resp = await self.http_client.post("http://127.0.0.1:8000/chat", json=chat_payload)
             if resp.status_code == 200:
-                brain_response = resp.json()
-                reply_text = brain_response.get("reply", "")
+                import json
+                lines = [line.strip() for line in resp.text.split('\n') if line.strip()]
+                if not lines:
+                    return
+                
+                # Get the last complete JSON update for the final reply
+                last_response = json.loads(lines[-1])
+                reply_text = last_response.get("reply", "")
                 
                 if reply_text:
                     await update.message.reply_text(reply_text)

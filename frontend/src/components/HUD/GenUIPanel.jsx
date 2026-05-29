@@ -1,5 +1,6 @@
 import React from 'react';
 import { useUI } from '../../context/UIContext';
+import { useRambot } from '../../context/RambotContext';
 import * as LucideIcons from 'lucide-react';
 import { z } from 'zod';
 import { defineCatalog } from '@json-render/core';
@@ -16,6 +17,19 @@ const catalog = defineCatalog(schema, {
                 className: z.string().optional()
             }).passthrough(),
             description: "A flexible container for layout"
+        },
+        Carousel: {
+            props: z.object({
+                className: z.string().optional()
+            }).passthrough(),
+            description: "A swipeable carousel for multiple items or cards. Place components inside as children."
+        },
+        Row: {
+            props: z.object({
+                className: z.string().optional(),
+                gap: z.string().optional()
+            }).passthrough(),
+            description: "A horizontal layout container that displays items side-by-side, with horizontal scrolling if they overflow."
         },
         Text: {
             props: z.object({
@@ -35,6 +49,14 @@ const catalog = defineCatalog(schema, {
                 actionId: z.string().optional()
             }).passthrough(),
             description: "A clickable button"
+        },
+        TextInput: {
+            props: z.object({
+                name: z.string().optional(),
+                placeholder: z.string().optional(),
+                className: z.string().optional()
+            }).passthrough(),
+            description: "A text input field for the user to type in. Pressing Enter sends the text to the backend."
         },
         Icon: {
             props: z.object({
@@ -124,12 +146,52 @@ const catalog = defineCatalog(schema, {
 // ============================================================
 const { registry } = defineRegistry(catalog, {
     components: {
-        Container: ({ props, children }) => (
+        Container: ({ props = {}, children }) => (
             <div className={props.className}>
                 {children}
             </div>
         ),
-        Text: ({ props, children }) => {
+        Carousel: ({ props = {}, children }) => {
+            const [currentIndex, setCurrentIndex] = React.useState(0);
+            const itemsCount = React.Children.count(children);
+            return (
+                <div className={`relative w-full max-w-2xl ${props.className || ''}`}>
+                    <div className="overflow-hidden rounded-[2rem]">
+                        <div 
+                            className="flex transition-transform duration-500 ease-in-out"
+                            style={{ transform: `translateX(-${currentIndex * 100}%)` }}
+                        >
+                            {React.Children.map(children, child => (
+                                <div className="w-full shrink-0 flex justify-center">
+                                    {child}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    {itemsCount > 1 && (
+                        <div className="absolute -bottom-8 left-0 right-0 flex justify-center gap-2">
+                            {React.Children.map(children, (_, idx) => (
+                                <button 
+                                    data-gaze-target="true"
+                                    className={`h-2 rounded-full transition-all duration-300 ${idx === currentIndex ? 'bg-cyan-400 w-6' : 'bg-white/20 w-2 hover:bg-white/40'}`}
+                                    onClick={() => setCurrentIndex(idx)}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        },
+        Row: ({ props = {}, children }) => (
+            <div className={`grid grid-flow-col auto-cols-fr items-stretch ${props.gap ? `gap-${props.gap}` : 'gap-4'} ${props.className || 'w-full'}`}>
+                {React.Children.map(children, child => (
+                    <div className="flex flex-col justify-start">
+                        {child}
+                    </div>
+                ))}
+            </div>
+        ),
+        Text: ({ props = {}, children }) => {
             const Tag = props.variant === 'text' ? 'span' : (props.variant || 'p');
             return (
                 <Tag className={props.className}>
@@ -138,13 +200,17 @@ const { registry } = defineRegistry(catalog, {
                 </Tag>
             );
         },
-        Button: ({ props, children }) => {
+        Button: ({ props = {}, children }) => {
             const Icon = props.iconName ? LucideIcons[props.iconName] : null;
+            const { processCommand } = useRambot();
             return (
                 <button 
                     data-gaze-target="true" 
-                    className={props.className} 
-                    onClick={() => console.log(`Action triggered: ${props.actionId || props.text}`)}
+                    className={props.className || "px-4 py-2 bg-blue-500/20 text-blue-400 rounded-xl hover:bg-blue-500/30 transition-all font-medium"} 
+                    onClick={() => {
+                        const payload = props.actionId || props.text;
+                        if (payload) processCommand(payload);
+                    }}
                 >
                     {Icon && <Icon className="inline-block mr-2" size={16} />}
                     {props.text && <span>{props.text}</span>}
@@ -152,23 +218,164 @@ const { registry } = defineRegistry(catalog, {
                 </button>
             );
         },
-        Icon: ({ props }) => {
+        TextInput: ({ props = {} }) => {
+            const [value, setValue] = React.useState('');
+            const { processCommand } = useRambot();
+            return (
+                <input
+                    type="text"
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && value.trim()) {
+                            processCommand(value.trim());
+                            setValue('');
+                        }
+                    }}
+                    placeholder={props.placeholder || 'Type here...'}
+                    className={`bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white placeholder-white/40 focus:outline-none focus:border-cyan-500 transition-colors w-full ${props.className || ''}`}
+                    data-gaze-target="true"
+                />
+            );
+        },
+        Icon: ({ props = {} }) => {
             const IconComp = props.iconName ? LucideIcons[props.iconName] : null;
             return IconComp ? <IconComp className={props.className} size={props.size || 16} /> : null;
         },
-        WeatherCard: ({ props }) => {
+        WeatherCard: ({ props = {} }) => {
             // Support legacy "data" wrapper just in case
             const sourceData = props.data || props;
-            const { location = 'Unknown', temperature = '--', condition = '--', feels_like, high, low, humidity, wind_speed, hourly = [], forecast = [] } = sourceData;
+            const { variant = 'default', location = 'Unknown', temperature = '--', condition = '--', feels_like, high, low, humidity, wind_speed, hourly = [] } = sourceData;
+            const isCompact = variant === 'compact';
+            
+            // Interaction States: null, 'loading_q', 'questions', 'loading_a', 'answer'
+            const [interactionState, setInteractionState] = React.useState(null);
+            const [questions, setQuestions] = React.useState([]);
+            const [currentAnswer, setCurrentAnswer] = React.useState('');
+
+            const fetchFromLLM = async (prompt) => {
+                const res = await fetch("http://127.0.0.1:8000/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: prompt, sender: "widget_" + Date.now() })
+                });
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = "";
+                while(true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, {stream: true});
+                    const lines = chunk.split('\n').filter(l => l.trim());
+                    for (let line of lines) {
+                        try {
+                            const obj = JSON.parse(line);
+                            if (obj.reply) fullText = obj.reply; 
+                        } catch(e) {}
+                    }
+                }
+                return fullText;
+            };
+
+            const startInteraction = async () => {
+                if (interactionState !== null) return;
+                setInteractionState('loading_q');
+                try {
+                    const prompt = `基于地点：${location}，气温${high}°C至${low}°C，${condition}。预测用户最想问的2到3个关于生活或出行的简短问题。严格返回纯JSON字符串数组格式，例如：["今天带伞吗？", "适合晨跑吗？", "穿衣建议"]。只输出JSON数组，不要别的废话。`;
+                    const text = await fetchFromLLM(prompt);
+                    const match = text.match(/\[(.*)\]/s);
+                    if (match) {
+                        setQuestions(JSON.parse("[" + match[1] + "]"));
+                    } else {
+                        setQuestions(JSON.parse(text));
+                    }
+                } catch(e) {
+                    setQuestions(["这天气适合穿什么？", "有什么出行建议？"]);
+                }
+                setInteractionState('questions');
+            };
+
+            const askQuestion = async (q) => {
+                setInteractionState('loading_a');
+                try {
+                    const prompt = `地点：${location}，天气：${high}°C至${low}°C，${condition}。请一两句话简短直接回答：${q}`;
+                    const ans = await fetchFromLLM(prompt);
+                    setCurrentAnswer(ans || "暂时无法生成建议。");
+                } catch(e) {
+                    setCurrentAnswer("获取由于网络原因失败。");
+                }
+                setInteractionState('answer');
+            };
+            
             return (
-                <div className="w-full max-w-2xl text-white space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                    <div className="bg-white/10 rounded-[2rem] border border-white/20 p-8 flex items-start justify-between shadow-2xl">
-                        <div>
-                            <p className="text-white/50 text-sm uppercase tracking-widest font-mono">{location}</p>
-                            <p className="text-8xl font-thin mt-2">{temperature}°</p>
-                            <p className="text-white/70 text-xl mt-1">{condition}</p>
-                            <p className="text-white/40 text-sm mt-2">Feels like {feels_like || (temperature !== '--' ? temperature - 2 : '--')}° · H:{high || (temperature !== '--' ? temperature + 3 : '--')}° L:{low || (temperature !== '--' ? temperature - 4 : '--')}°</p>
+                <div 
+                    onClick={() => { if (!interactionState) startInteraction(); }}
+                    className={`w-full ${isCompact ? 'space-y-3' : 'space-y-6 max-w-2xl'} text-white animate-in fade-in slide-in-from-bottom-4 duration-700 relative ${!interactionState ? 'cursor-pointer group-card' : ''}`}
+                >
+                    <div className={`bg-white/10 ${isCompact ? 'rounded-3xl' : 'rounded-[2rem]'} border border-white/20 flex flex-col justify-between shadow-2xl relative overflow-hidden transition-all duration-300 ${!interactionState ? 'hover:bg-white/20' : ''} min-h-[140px]`}>
+                        
+                        <div className={`flex items-start justify-between w-full transition-opacity duration-300 ${interactionState ? 'opacity-0 scale-95' : 'opacity-100'} ${isCompact ? 'p-5' : 'p-8'}`}>
+                            <div>
+                                <p className="text-white/50 text-[10px] uppercase tracking-widest font-mono line-clamp-1">{location}</p>
+                                <p className={`${isCompact ? 'text-4xl' : 'text-8xl'} font-thin mt-1 tracking-tighter`}>{temperature}°</p>
+                                <p className={`text-white/70 ${isCompact ? 'text-sm' : 'text-xl'} mt-1 line-clamp-1`}>{condition}</p>
+                                <p className="text-white/40 text-[10px] mt-1 whitespace-nowrap">H:{high || '--'}° L:{low || '--'}°</p>
+                            </div>
                         </div>
+
+                        {interactionState && (
+                            <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-xl flex flex-col items-center justify-center p-4 text-center animate-in fade-in duration-300">
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); setInteractionState(null); }}
+                                    className="absolute top-2 right-2 text-white/50 hover:text-white hover:bg-white/20 bg-white/10 rounded-full w-6 h-6 flex items-center justify-center text-[10px] z-20 transition-colors"
+                                >✕</button>
+
+                                {interactionState === 'loading_q' && (
+                                    <div className="flex flex-col items-center gap-2 justify-center h-full">
+                                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                        <span className="text-xs text-white/50">预测问题中...</span>
+                                    </div>
+                                )}
+
+                                {interactionState === 'questions' && (
+                                    <div className="flex flex-col gap-2 w-full mt-4 justify-center h-full max-w-[200px] mx-auto">
+                                        <p className="text-[10px] text-white/60 mb-1 uppercase tracking-widest text-left">Suggested for you</p>
+                                        {questions.slice(0,3).map((q, i) => (
+                                            <button 
+                                                key={i}
+                                                onClick={(e) => { e.stopPropagation(); askQuestion(q); }}
+                                                className="bg-white/10 hover:bg-cyan-400/20 hover:border-cyan-400/40 border border-white/10 rounded-lg py-2 px-3 text-xs w-full transition-all duration-300 text-white/90 text-left line-clamp-1 truncate"
+                                            >
+                                                {q}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {interactionState === 'loading_a' && (
+                                    <div className="flex flex-col items-center gap-2 justify-center h-full">
+                                        <div className="w-5 h-5 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin"></div>
+                                        <span className="text-xs text-white/50">分析中...</span>
+                                    </div>
+                                )}
+
+                                {interactionState === 'answer' && (
+                                    <div className="flex flex-col items-start text-left w-full h-full justify-between mt-2 pt-2">
+                                        <div className="w-full h-full overflow-y-auto pr-1">
+                                            <p className="text-white/90 text-xs leading-relaxed">
+                                                {currentAnswer}
+                                            </p>
+                                        </div>
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); setInteractionState('questions'); }}
+                                            className="text-cyan-400 text-[10px] mt-2 hover:text-cyan-300 uppercase tracking-wider shrink-0 transition-colors"
+                                        >
+                                            ← 返回选项
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {hourly.length > 0 && (
@@ -188,7 +395,7 @@ const { registry } = defineRegistry(catalog, {
                 </div>
             );
         },
-        Metric: ({ props }) => {
+        Metric: ({ props = {} }) => {
             const Icon = props.icon ? LucideIcons[props.icon] : null;
             return (
                 <div className={`bg-white/10 rounded-3xl border border-white/10 p-6 flex flex-col items-center justify-center text-center ${props.className}`}>
@@ -198,7 +405,7 @@ const { registry } = defineRegistry(catalog, {
                 </div>
             );
         },
-        FileManager: ({ props }) => {
+        FileManager: ({ props = {} }) => {
             const { path, files = [], className } = props;
             const getFileIcon = (type, name) => {
                 if (type === 'directory' || type === 'folder') return LucideIcons.Folder;
@@ -281,7 +488,7 @@ const { registry } = defineRegistry(catalog, {
                 </div>
             );
         },
-        Image: ({ props }) => {
+        Image: ({ props = {} }) => {
             const [isExpanded, setIsExpanded] = React.useState(false);
             return (
                 <div 
@@ -307,7 +514,7 @@ const { registry } = defineRegistry(catalog, {
                 </div>
             );
         },
-        Video: ({ props }) => {
+        Video: ({ props = {} }) => {
             const videoRef = React.useRef(null);
             const [error, setError] = React.useState(null);
 
@@ -361,15 +568,15 @@ const { registry } = defineRegistry(catalog, {
                             }}
                             onLoadedMetadata={() => setError(null)}
                         >
+                            <source src={normalizedSrc} type="video/mp4" />
                             <source src={normalizedSrc.replace(/\.mp4$/, '.webm')} type="video/webm" />
-                            <source src={normalizedSrc.replace(/\.webm$/, '.mp4')} type="video/mp4" />
                             Your browser does not support the video tag.
                         </video>
                     )}
                 </div>
             );
         },
-        Link: ({ props }) => (
+        Link: ({ props = {} }) => (
             <a 
                 href={props.href} 
                 target="_blank" 
@@ -381,66 +588,84 @@ const { registry } = defineRegistry(catalog, {
                 <LucideIcons.ExternalLink size={14} className="opacity-50" />
             </a>
         ),
-        Map: ({ props }) => {
-            const { userLocation } = useUI();
-            const zoom = props.zoom || 14;
-            const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY;
-            const { query, origin, destination, className } = props;
-            
-            // Resolve "Current Location" to exact GPS coordinates if available
-            const resolveLoc = (loc) => {
-                if ((loc === "Current Location" || !loc) && userLocation) {
-                    return `${userLocation.lat},${userLocation.lng}`;
-                }
-                return loc;
-            };
+        Map: ({ props = {} }) => {
+            const { userLocation, requestNativeLocation } = useUI();
+            const { query, origin, destination, zoom = 14, className } = props;
+            const googleKey = import.meta.env.VITE_GOOGLE_MAPS_KEY;
+            const iframeRef = React.useRef(null);
 
-            const resolvedOrigin = resolveLoc(origin);
-            const resolvedDestination = resolveLoc(destination || query);
-            
-            let src = "";
-            let displayTitle = query || destination || "Navigation Map";
+            React.useEffect(() => {
+                // Request native location fix on mount (Lazy load)
+                if (!userLocation) {
+                    requestNativeLocation();
+                }
 
-            if (apiKey) {
-                // Official Embed API
-                if (resolvedOrigin && resolvedDestination) {
-                    src = `https://www.google.com/maps/embed/v1/directions?key=${apiKey}&origin=${encodeURIComponent(resolvedOrigin)}&destination=${encodeURIComponent(resolvedDestination)}&zoom=${zoom}`;
-                } else {
-                    src = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${encodeURIComponent(resolvedDestination)}&zoom=${zoom}`;
-                }
-            } else {
-                // Public Fallback - Use maps.google.com for better compatibility
-                if (resolvedOrigin && resolvedDestination) {
-                    src = `https://maps.google.com/maps?saddr=${encodeURIComponent(resolvedOrigin)}&daddr=${encodeURIComponent(resolvedDestination)}&output=embed&z=${zoom}`;
-                } else {
-                    src = `https://maps.google.com/maps?q=${encodeURIComponent(resolvedDestination)}&output=embed&z=${zoom}`;
-                }
-            }
+                const sendLocation = () => {
+                    if (userLocation && iframeRef.current && iframeRef.current.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage({
+                            type: 'UPDATE_LOCATION',
+                            lat: userLocation.lat,
+                            lng: userLocation.lng
+                        }, '*');
+                    }
+                };
+
+                const handleMessage = (e) => {
+                    if (e.data && e.data.type === 'REQUEST_LOCATION') {
+                        sendLocation();
+                    }
+                };
+
+                window.addEventListener('message', handleMessage);
+                sendLocation(); // Eager push if already ready
+
+                return () => window.removeEventListener('message', handleMessage);
+            }, [userLocation]);
+
+            const url = React.useMemo(() => {
+                const params = new URLSearchParams();
+                if (googleKey) params.set('key', googleKey);
+                params.set('zoom', zoom.toString());
+
+                const serializeLoc = (loc) => {
+                    // For initial origin calculation, we don't use userLocation synchronously
+                    // to avoid iframe reload triggers. PostMessage handles it dynamically.
+                    return typeof loc === 'object' ? JSON.stringify(loc) : loc;
+                };
+
+                const resOrigin = serializeLoc(origin);
+                const resDest = serializeLoc(destination || query);
+                
+                if (resOrigin) params.set('origin', resOrigin);
+                if (resDest) params.set('dest', resDest);
+                
+                return `./map.html?${params.toString()}`;
+            }, [googleKey, zoom, origin, destination, query]);
 
             return (
                 <div className={`relative w-full h-full min-h-[400px] overflow-hidden group ${className || ''}`}>
                     <iframe
+                        ref={iframeRef}
                         title="Navigation Map"
                         width="100%"
                         height="100%"
                         frameBorder="0"
                         style={{ 
                             border: 0, 
-                            filter: apiKey ? 'invert(90%) hue-rotate(180deg) brightness(0.9) contrast(1.1)' : 'none',
                             pointerEvents: 'auto',
                             backgroundColor: '#18181b'
                         }}
-                        src={src}
+                        src={url}
                         allowFullScreen
-                        allow="geolocation"
+                        allow="geolocation *"
                     ></iframe>
                     
                     {/* Immersive Footer Only */}
                     <div className="absolute bottom-8 right-8 z-20 pointer-events-none flex flex-col items-end gap-2">
                          {userLocation && (
                              <div className="px-3 py-1 bg-cyan-500/20 backdrop-blur-md rounded-full border border-cyan-500/30 flex items-center gap-2 animate-pulse">
-                                 <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                                 <span className="text-[8px] font-mono text-cyan-400 uppercase tracking-widest font-bold">High Precision GPS</span>
+                                  <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                                  <span className="text-[8px] font-mono text-cyan-400 uppercase tracking-widest font-bold">High Precision GPS</span>
                              </div>
                          )}
                          <div className="px-4 py-2 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 flex items-center gap-2 opacity-20 hover:opacity-100 transition-opacity">
@@ -487,12 +712,23 @@ const GenUIPanel = () => {
                         <div className="animate-in fade-in zoom-in duration-700 w-full flex flex-col items-center justify-center">
                             {(() => {
                                 try {
-                                    // Normalize spec: ensure all elements have a children array
-                                    const normalizedSpec = { ...genUISchema };
+                                    // Normalize spec: ensure all elements have a children array and props object
+                                    const normalizedSpec = JSON.parse(JSON.stringify(genUISchema));
+                                    if (!normalizedSpec.elements || typeof normalizedSpec.elements !== 'object') {
+                                        normalizedSpec.elements = {};
+                                    }
                                     if (normalizedSpec.elements) {
                                         Object.keys(normalizedSpec.elements).forEach(key => {
-                                            if (!normalizedSpec.elements[key].children) {
-                                                normalizedSpec.elements[key].children = [];
+                                            const el = normalizedSpec.elements[key];
+                                            if (!el || typeof el !== 'object') {
+                                                normalizedSpec.elements[key] = { type: 'Container', children: [], props: {} };
+                                            } else {
+                                                if (!Array.isArray(el.children)) el.children = [];
+                                                // Prevent circular self-reference
+                                                if (el.children.includes(key)) {
+                                                    el.children = el.children.filter(id => id !== key);
+                                                }
+                                                if (!el.props || typeof el.props !== 'object') el.props = {};
                                             }
                                         });
                                     }
@@ -531,4 +767,3 @@ const GenUIPanel = () => {
 };
 
 export default GenUIPanel;
-

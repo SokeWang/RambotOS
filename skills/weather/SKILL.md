@@ -17,9 +17,12 @@ Provides detailed real-time weather updates and forecasts via the `wttr.in` serv
 
 ### Get Detailed Weather
 To retrieve a comprehensive weather report for a location, execute the `get_weather.py` script.
+**IMPORTANT**: If the user asks for the weather but does not specify a location, do NOT ask the user. Instead, you MUST either:
+1. Provide the user's location based on your long-term memory of their current or home location (e.g. `python3 skills/weather/scripts/get_weather.py "New York"`).
+2. Execute the script without any arguments, which will automatically detect their location using their IP address (e.g. `python3 skills/weather/scripts/get_weather.py`).
 
 ```bash
-python3 skills/weather/scripts/get_weather.py "<location>"
+python3 skills/weather/scripts/get_weather.py [location]
 ```
 
 ### Examples

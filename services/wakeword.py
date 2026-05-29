@@ -2,6 +2,7 @@ import time
 import struct
 import pyaudio
 import pvporcupine
+import sys
 from PySide6.QtCore import QThread, Signal
 from loguru import logger
 from config.config import CFG
@@ -22,8 +23,17 @@ class WakeWordThread(QThread):
 
         while self._running:
             try:
+                # Handle frozen path for PyInstaller
+                if getattr(sys, 'frozen', False):
+                    base_path = sys._MEIPASS
+                else:
+                    import os
+                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
                 # Custom wake word model path
-                keyword_path = "resources/wakewords/Rambo.ppn"
+                import os
+                keyword_path = os.path.join(base_path, "resources", "wakewords", "Rambo.ppn")
+                logger.info(f"Loading wake word model from: {keyword_path}")
                 
                 porcupine = pvporcupine.create(
                     access_key=self.access_key,
