@@ -66,7 +66,7 @@ class SkillIndex:
         
         # Initialize ChromaDB for vector search
         try:
-            db_path = "./db/skill_embeddings"
+            db_path = os.path.join(CFG.PROJECT_ROOT, "backend", "db", "skill_embeddings")
             os.makedirs(db_path, exist_ok=True)
             
             self._chroma_client = chromadb.PersistentClient(path=db_path)

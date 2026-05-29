@@ -15,7 +15,7 @@ class MemoryManager:
         if getattr(sys, 'frozen', False):
             db_path = os.path.expanduser("~/.rambot/db/chroma_data")
         else:
-            db_path = "./db/chroma_data"
+            db_path = os.path.join(CFG.PROJECT_ROOT, "backend", "db", "chroma_data")
             
         if not os.path.exists(db_path):
             os.makedirs(db_path, exist_ok=True)

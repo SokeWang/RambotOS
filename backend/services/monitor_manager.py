@@ -11,7 +11,7 @@ class MonitorService:
     def _discover_scripts(self):
         """Scans the base directory for standalone_*.py scripts."""
         scripts = {}
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         for f in os.listdir(base_dir):
             if f.startswith("standalone_") and f.endswith(".py"):
                 if f == "standalone_monitor.py":
