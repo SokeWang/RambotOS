@@ -101,28 +101,30 @@ def wait_for_core():
     return False
 
 def main():
-    # 0. Set environment variables for packaging
-    if getattr(sys, 'frozen', False):
-        # If running as a bundle (PyInstaller)
-        os.chdir(sys._MEIPASS)
-        logger.info(f"Running in frozen mode. MEIPASS: {sys._MEIPASS}")
-    
-    # 1. Start Core
-    core_proc = start_core()
-    if not core_proc:
-        sys.exit(1)
+    core_proc = None
+    tg_proc = None
+    email_proc = None
 
-    # 2. Wait for Core
-    if not wait_for_core():
-        core_proc.terminate()
-        sys.exit(1)
-
-    # 2.5 Start Standalone Monitors
-    tg_proc = start_telegram()
-    email_proc = start_email()
-
-    # 3. Wait in foreground and maintain backend service suite
     try:
+        # 0. Set environment variables for packaging
+        if getattr(sys, 'frozen', False):
+            os.chdir(sys._MEIPASS)
+            logger.info(f"Running in frozen mode. MEIPASS: {sys._MEIPASS}")
+        
+        # 1. Start Core
+        core_proc = start_core()
+        if not core_proc:
+            sys.exit(1)
+
+        # 2. Wait for Core
+        if not wait_for_core():
+            sys.exit(1)
+
+        # 2.5 Start Standalone Monitors
+        tg_proc = start_telegram()
+        email_proc = start_email()
+
+        # 3. Wait in foreground and maintain backend service suite
         logger.info("=============================================================")
         logger.info("🌌 Rambot Backend Services are running in Headless Dev Mode.")
         logger.info("👉 Direct console logs will output above.")
