@@ -61,6 +61,28 @@ def start_telegram():
         logger.error(f"Failed to start Telegram Monitor: {e}")
         return None
 
+def start_email():
+    """Start the Email Monitor service."""
+    logger.info("Starting Email Monitor Service...")
+    try:
+        if getattr(sys, 'frozen', False):
+            cmd = [sys.executable, "--email"]
+        else:
+            cmd = [sys.executable, "standalone_monitor.py"]
+            
+        proc = subprocess.Popen(
+            cmd,
+            stdout=None,
+            stderr=None,
+            text=True,
+            bufsize=1,
+            close_fds=True if os.name != "nt" else False
+        )
+        return proc
+    except Exception as e:
+        logger.error(f"Failed to start Email Monitor: {e}")
+        return None
+
 def wait_for_core():
     """Wait for Rambot Core to be ready."""
     logger.info("Waiting for Core to initialize...")
@@ -95,22 +117,37 @@ def main():
         core_proc.terminate()
         sys.exit(1)
 
-    # 2.5 Start Telegram Monitor
+    # 2.5 Start Standalone Monitors
     tg_proc = start_telegram()
+    email_proc = start_email()
 
-    # 3. Start GUI
-    logger.info("Launching Rambot OS GUI...")
+    # 3. Start GUI or wait in foreground
+    no_gui = ("--no-gui" in sys.argv or "--backend" in sys.argv)
+    
     try:
-        from gui import run_gui
-        exit_code = run_gui()
+        if no_gui:
+            logger.info("=============================================================")
+            logger.info("🌌 Rambot Backend Services are running in Headless Dev Mode.")
+            logger.info("👉 Direct console logs will output above.")
+            logger.info("👉 You can now run 'npm run dev' inside the 'frontend/' folder.")
+            logger.info("👉 Press Ctrl+C in this terminal to gracefully terminate all services.")
+            logger.info("=============================================================")
+            while True:
+                time.sleep(1)
+        else:
+            logger.info("Launching Rambot OS GUI...")
+            from gui import run_gui
+            exit_code = run_gui()
     except KeyboardInterrupt:
-        logger.info("User interrupted.")
+        logger.info("KeyboardInterrupt detected. Terminating backend services...")
     except Exception as e:
-        logger.error(f"GUI crashed: {e}")
+        logger.error(f"Execution failed: {e}")
     finally:
-        # 4. Cleanup
-        logger.info("Cleaning up services...")
-        if core_proc.poll() is None:
+        # 4. Cleanup all services safely
+        logger.info("Cleaning up backend services...")
+        
+        if core_proc and core_proc.poll() is None:
+            logger.info("Stopping Rambot Core Service...")
             core_proc.terminate()
             try:
                 core_proc.wait(timeout=5)
@@ -118,12 +155,22 @@ def main():
                 core_proc.kill()
         
         if tg_proc and tg_proc.poll() is None:
+            logger.info("Stopping Telegram Monitor...")
             tg_proc.terminate()
             try:
                 tg_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 tg_proc.kill()
-        logger.info("Done.")
+
+        if email_proc and email_proc.poll() is None:
+            logger.info("Stopping Email Monitor...")
+            email_proc.terminate()
+            try:
+                email_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                email_proc.kill()
+                
+        logger.info("All services cleaned up. Done.")
 
 if __name__ == "__main__":
     # Prevent multiprocessing issues on Windows when frozen
@@ -208,6 +255,13 @@ if __name__ == "__main__":
                 logger.info("Starting Telegram Monitor分身...")
                 from standalone_telegram import main as tg_main
                 tg_main()
+                sys.exit(0)
+            elif sys.argv[1] == "--email":
+                logger.info("Starting Email Monitor分身...")
+                from standalone_monitor import StandaloneMonitor
+                import asyncio
+                monitor = StandaloneMonitor()
+                asyncio.run(monitor.run())
                 sys.exit(0)
         except Exception as e:
             logger.critical(f"分身启动失败! Error: {e}")
