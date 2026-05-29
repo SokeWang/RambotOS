@@ -18,14 +18,13 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
     useEffect(() => {
         console.log("Setting up Backend Connection...");
 
-        // Ensure QWebChannel is available
-        if (typeof window.QWebChannel === 'undefined') {
-            console.error("QWebChannel library not loaded!");
-            return;
-        }
-
         // We assume qt.webChannelTransport is injected by the QWebEngine
         if (typeof window.qt !== 'undefined' && window.qt.webChannelTransport) {
+            // Ensure QWebChannel is available
+            if (typeof window.QWebChannel === 'undefined') {
+                console.error("QWebChannel library not loaded!");
+                return;
+            }
             // Store handlers for cleanup
             const registeredHandlers = {};
 
