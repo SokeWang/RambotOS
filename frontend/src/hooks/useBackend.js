@@ -11,6 +11,7 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
     // Use Ref to access latest callback without re-running effect
     const onAudioEndedRef = useRef(onAudioEnded);
     const historyRequested = useRef(false);
+    const lastNotifTime = useRef(Date.now() / 1000);
     useEffect(() => {
         onAudioEndedRef.current = onAudioEnded;
     }, [onAudioEnded]);
@@ -340,9 +341,41 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 isMock: true,
                 select_file: () => {
                     alert("Local file selection is not available in pure Web mode. Please use drag-and-drop or upload.");
+                },
+                set_listening_state: (isListening) => {
+                    fetch(`http://127.0.0.1:8000/wakeword/state?paused=${isListening}`, { method: 'POST' })
+                        .catch(err => console.error("Failed to update wake word state:", err));
                 }
             });
             addLog('system', 'Web Mode Backend Initialized');
+
+            const pollNotifications = async () => {
+                try {
+                    const res = await fetch(`http://127.0.0.1:8000/notifications?since=${lastNotifTime.current}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (data.length > 0) {
+                        data.forEach(notif => {
+                            if (notif.timestamp > lastNotifTime.current) {
+                                lastNotifTime.current = notif.timestamp;
+                            }
+                            if (notif.message === 'WAKE_WORD_TRIGGERED') {
+                                console.log("Wake word triggered! Dispatching WakeWordDetected event.");
+                                window.dispatchEvent(new CustomEvent('WakeWordDetected'));
+                            } else if (notif.source === 'system') {
+                                setNotification(notif.message);
+                                setTimeout(() => setNotification(null), 8000);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    // Ignore transient network errors
+                }
+            };
+            const pollInterval = setInterval(pollNotifications, 1000);
+            return () => {
+                clearInterval(pollInterval);
+            };
         }
     }, []);
  

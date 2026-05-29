@@ -28,7 +28,7 @@ class WakeWordThread(threading.Thread):
                     base_path = sys._MEIPASS
                 else:
                     import os
-                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
                 # Custom wake word model path
                 import os

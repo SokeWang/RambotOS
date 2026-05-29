@@ -103,12 +103,14 @@ class SkillUpdate(BaseModel):
 # In-memory State
 monitors: Dict[str, dict] = {}
 notifications: deque = deque(maxlen=50)  # Auto-capped at 50, O(1) append
+wakeword_thread = None
 
 # Central Gateway Brain
 brain = LangchainBrain()
 
 @app.on_event("startup")
 async def startup_event():
+    global wakeword_thread
     logger.info("Core: Initializing central LangchainBrain...")
     await brain.initialize()
     logger.info("Core: Central brain is ready.")
@@ -119,6 +121,24 @@ async def startup_event():
         logger.info("Core: Background Scheduler Service started successfully.")
     except Exception as e:
         logger.error(f"Core: Failed to start Scheduler Service: {e}")
+
+    try:
+        from services.wakeword import WakeWordThread
+        def on_wake_word_detected():
+            logger.info("Wake word detected on backend! Pushing event...")
+            notif_data = {
+                "source": "wakeword",
+                "message": "WAKE_WORD_TRIGGERED",
+                "level": "info",
+                "timestamp": time.time()
+            }
+            notifications.append(notif_data)
+            
+        wakeword_thread = WakeWordThread(callback=on_wake_word_detected)
+        wakeword_thread.start()
+        logger.info("Core: Background WakeWordThread started successfully.")
+    except Exception as e:
+        logger.error(f"Core: Failed to start WakeWordThread: {e}")
 
 @app.get("/")
 async def root():
@@ -231,6 +251,24 @@ async def push_notification(notif: Notification):
 async def get_notifications(since: float = 0):
     """Get new notifications since a specific timestamp."""
     return [n for n in notifications if n["timestamp"] > since]
+
+@app.post("/wakeword/state")
+async def set_wakeword_state(paused: bool):
+    global wakeword_thread
+    if wakeword_thread:
+        if paused:
+            wakeword_thread.pause()
+        else:
+            wakeword_thread.resume()
+        return {"status": "success", "paused": paused}
+    return {"status": "disabled"}
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global wakeword_thread
+    if wakeword_thread:
+        logger.info("Core: Stopping WakeWordThread...")
+        wakeword_thread.stop()
 
 # --- Chat Gateway ---
 

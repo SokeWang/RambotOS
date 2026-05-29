@@ -344,6 +344,9 @@ export const RambotProvider = ({ children }) => {
             if (backendProps.backend.wakeWordDetected) {
                 backendProps.backend.wakeWordDetected.connect(onWakeWord);
             }
+            // For pure Web browser mode, listen to window custom event
+            window.addEventListener('WakeWordDetected', onWakeWord);
+
             if (backendProps.backend.controlSignal) {
                 backendProps.backend.controlSignal.connect(onControlSignal);
             }
@@ -363,6 +366,7 @@ export const RambotProvider = ({ children }) => {
             }
 
             return () => {
+                window.removeEventListener('WakeWordDetected', onWakeWord);
                 try {
                     if (backendProps.backend.wakeWordDetected) {
                         backendProps.backend.wakeWordDetected.disconnect(onWakeWord);
