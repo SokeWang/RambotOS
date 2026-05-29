@@ -336,36 +336,142 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 }
             };
         } else {
-            console.log("Qt WebChannel Transport not found (Dev Mode?)");
+            console.log("Qt WebChannel Transport not found. Initializing Web Browser mode.");
+            setBackend({
+                isMock: true,
+                select_file: () => {
+                    alert("Local file selection is not available in pure Web mode. Please use drag-and-drop or upload.");
+                }
+            });
+            addLog('system', 'Web Mode Backend Initialized');
         }
     }, []);
-
-    const sendMessage = useCallback((text, attachment, capturedImage) => {
-        if (backend) {
+ 
+    const sendMessage = useCallback(async (text, attachment, capturedImage) => {
+        if (backend && !backend.isMock) {
             backend.chat(text, attachment || "", capturedImage || "");
-        } else {
-            console.error("Backend not connected");
-            addLog('error', 'Backend Disconnected');
+            return;
         }
-    }, [backend, addLog]);
-
+        
+        console.log("useBackend: Using Web API fallback to send message...");
+        addLog('system', 'Sending message via Web API...');
+        
+        try {
+            // Append temporary AI "thinking" message
+            setChatHistory(prev => [...prev, {
+                type: 'ai',
+                content: [{ type: 'text', text: 'Thinking...' }],
+                time: new Date()
+            }]);
+            
+            const response = await fetch("http://127.0.0.1:8000/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message: text,
+                    sender: "os_user",
+                    attachment_base64: attachment || null,
+                    webcam_base64: capturedImage || null
+                })
+            });
+            
+            if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedReply = "";
+            let toolCalls = [];
+            let genUIContent = null;
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split("\n");
+                
+                for (const line of lines) {
+                    if (line.trim()) {
+                        try {
+                            const payload = JSON.parse(line);
+                            if (payload.reply) {
+                                accumulatedReply = payload.reply;
+                            }
+                            if (payload.tool_calls) {
+                                toolCalls = payload.tool_calls;
+                            }
+                            if (payload.gen_ui) {
+                                genUIContent = payload.gen_ui;
+                            }
+                            
+                            setChatHistory(prev => {
+                                const list = [...prev];
+                                const last = list[list.length - 1];
+                                if (last && last.type === 'ai') {
+                                    list[list.length - 1] = {
+                                        ...last,
+                                        content: [{ type: 'text', text: accumulatedReply }],
+                                        tool_calls: toolCalls,
+                                        time: new Date()
+                                    };
+                                }
+                                return list;
+                            });
+                        } catch (e) {
+                            // ignore partial JSON parse errors
+                        }
+                    }
+                }
+            }
+            
+            if (genUIContent) {
+                window.dispatchEvent(new CustomEvent('GenUIReceived', { detail: genUIContent }));
+            }
+            
+            setSubtitle(accumulatedReply);
+            setIsSubtitleFading(false);
+            if (subtitleTimeoutRef.current) clearTimeout(subtitleTimeoutRef.current);
+            subtitleTimeoutRef.current = setTimeout(() => {
+                setIsSubtitleFading(true);
+                setTimeout(() => setSubtitle(null), 500);
+            }, 8000);
+            
+            addLog('system', 'Response completed.');
+            
+        } catch (err) {
+            console.error("Web API call failed:", err);
+            addLog('error', `Web API failed: ${err.message}`);
+            setChatHistory(prev => {
+                const list = [...prev];
+                const last = list[list.length - 1];
+                if (last && last.type === 'ai' && last.content[0].text === 'Thinking...') {
+                    list[list.length - 1] = {
+                        ...last,
+                        content: [{ type: 'text', text: `Failed to connect to backend: ${err.message}` }]
+                    };
+                }
+                return list;
+            });
+        }
+    }, [backend, addLog, setChatHistory, setSubtitle, setIsSubtitleFading, subtitleTimeoutRef]);
+ 
     const processAudio = useCallback((base64Audio, capturedImage) => {
-        if (backend) {
+        if (backend && !backend.isMock) {
             backend.process_audio(base64Audio, capturedImage || "");
         } else {
-            console.error("Backend not connected!");
-            // Note: listening state is managed by useAudio, not here
+            console.error("Voice processing fallback is handled via text inputs in pure Web mode.");
+            addLog('system', 'Voice input is available natively via Web Speech APIs.');
         }
-    }, [backend]);
-
+    }, [backend, addLog]);
+ 
     const selectFile = useCallback(() => {
-        if (backend) {
+        if (backend && !backend.isMock) {
             backend.select_file();
         } else {
             console.error("Backend not connected for file selection");
         }
     }, [backend]);
-
+ 
     return {
         backend,
         sendMessage,
