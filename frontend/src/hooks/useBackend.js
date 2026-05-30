@@ -466,19 +466,21 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                                 base64Audio = payload.audio;
                             }
                             
-                            setChatHistory(prev => {
-                                const list = [...prev];
-                                const last = list[list.length - 1];
-                                if (last && last.type === 'ai') {
-                                    list[list.length - 1] = {
-                                        ...last,
-                                        content: [{ type: 'text', text: accumulatedReply }],
-                                        tool_calls: toolCalls,
-                                        time: new Date()
-                                    };
-                                }
-                                return list;
-                            });
+                            if (payload.reply || payload.tool_calls || payload.gen_ui) {
+                                setChatHistory(prev => {
+                                    const list = [...prev];
+                                    const last = list[list.length - 1];
+                                    if (last && last.type === 'ai') {
+                                        list[list.length - 1] = {
+                                            ...last,
+                                            content: [{ type: 'text', text: accumulatedReply }],
+                                            tool_calls: toolCalls,
+                                            time: new Date()
+                                        };
+                                    }
+                                    return list;
+                                });
+                            }
                         } catch (e) {
                             // ignore partial JSON parse errors
                         }
