@@ -16,3 +16,4 @@ aiosqlite
 agentmail
 ddgs
 langgraph-checkpoint-sqlite
+SpeechRecognition
