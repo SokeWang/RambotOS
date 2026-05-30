@@ -349,32 +349,59 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             });
             addLog('system', 'Web Mode Backend Initialized');
 
-            const pollNotifications = async () => {
-                try {
-                    const res = await fetch(`http://127.0.0.1:8000/notifications?since=${lastNotifTime.current}`);
-                    if (!res.ok) return;
-                    const data = await res.json();
-                    if (data.length > 0) {
-                        data.forEach(notif => {
-                            if (notif.timestamp > lastNotifTime.current) {
-                                lastNotifTime.current = notif.timestamp;
-                            }
-                            if (notif.message === 'WAKE_WORD_TRIGGERED') {
-                                console.log("Wake word triggered! Dispatching WakeWordDetected event.");
-                                window.dispatchEvent(new CustomEvent('WakeWordDetected'));
-                            } else if (notif.source === 'system') {
-                                setNotification(notif.message);
-                                setTimeout(() => setNotification(null), 8000);
-                            }
-                        });
+            // Establish real-time WebSocket connection for events, wake word, and notifications
+            let ws = null;
+            let reconnectTimeout = null;
+            let isCleanClose = false;
+
+            const connectWebSocket = () => {
+                console.log("WebSocket: Connecting to ws://127.0.0.1:8000/ws ...");
+                ws = new WebSocket("ws://127.0.0.1:8000/ws");
+
+                ws.onopen = () => {
+                    console.log("WebSocket: Connection established!");
+                    addLog('system', 'Real-time Event Channel Connected');
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const notif = JSON.parse(event.data);
+                        console.log("WebSocket: Received event:", notif);
+                        if (notif.message === 'WAKE_WORD_TRIGGERED') {
+                            console.log("Wake word triggered! Dispatching WakeWordDetected event.");
+                            window.dispatchEvent(new CustomEvent('WakeWordDetected'));
+                        } else if (notif.source === 'system') {
+                            setNotification(notif.message);
+                            setTimeout(() => setNotification(null), 8000);
+                        }
+                    } catch (e) {
+                        console.error("WebSocket: Failed to parse event message:", e);
                     }
-                } catch (e) {
-                    // Ignore transient network errors
-                }
+                };
+
+                ws.onclose = () => {
+                    if (!isCleanClose) {
+                        console.log("WebSocket: Connection closed. Reconnecting in 3s...");
+                        reconnectTimeout = setTimeout(connectWebSocket, 3000);
+                    }
+                };
+
+                ws.onerror = (err) => {
+                    console.error("WebSocket error:", err);
+                    ws.close();
+                };
             };
-            const pollInterval = setInterval(pollNotifications, 1000);
+
+            connectWebSocket();
+
             return () => {
-                clearInterval(pollInterval);
+                isCleanClose = true;
+                if (ws) {
+                    ws.close();
+                }
+                if (reconnectTimeout) {
+                    clearTimeout(reconnectTimeout);
+                }
             };
         }
     }, []);

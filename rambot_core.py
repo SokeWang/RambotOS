@@ -8,7 +8,7 @@ if os.path.exists(BACKEND_PATH) and BACKEND_PATH not in sys.path:
     sys.path.insert(0, BACKEND_PATH)
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from pydantic import BaseModel
@@ -38,7 +38,14 @@ app = FastAPI(title="Rambot Core Service")
 # Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +113,31 @@ monitors: Dict[str, dict] = {}
 notifications: deque = deque(maxlen=50)  # Auto-capped at 50, O(1) append
 wakeword_thread = None
 
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"WebSocket: Connected! Total active: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"WebSocket: Disconnected! Total active: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        logger.debug(f"WebSocket: Broadcasting event: {message}")
+        json_str = json.dumps(message)
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(json_str)
+            except Exception:
+                pass
+
+ws_manager = ConnectionManager()
+
 # Central Gateway Brain
 brain = LangchainBrain()
 
@@ -134,6 +166,13 @@ async def startup_event():
                 "timestamp": time.time()
             }
             notifications.append(notif_data)
+            # Broadcast wake word event to all connected WebSockets from background thread
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(ws_manager.broadcast(notif_data), loop)
+            except Exception as ex:
+                logger.error(f"Failed to broadcast wake word event: {ex}")
             
         wakeword_thread = WakeWordThread(callback=on_wake_word_detected)
         wakeword_thread.start()
@@ -240,12 +279,28 @@ async def unregister_monitor(name: str):
 
 # --- Notifications ---
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Standby for incoming client keep-alives or data
+            data = await websocket.receive_text()
+            logger.debug(f"WebSocket received data: {data}")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        logger.warning(f"WebSocket exception: {e}")
+        ws_manager.disconnect(websocket)
+
 @app.post("/notify")
 async def push_notification(notif: Notification):
     logger.info(f"Core: Received notification from {notif.source}: {notif.message}")
     notif_data = notif.dict()
     notif_data["timestamp"] = time.time()
     notifications.append(notif_data)  # deque auto-evicts oldest when full
+    # Broadcast notification to all connected WebSockets
+    await ws_manager.broadcast(notif_data)
     return {"status": "received"}
 
 @app.get("/notifications")
