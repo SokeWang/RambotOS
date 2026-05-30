@@ -85,6 +85,7 @@ class ChatRequest(BaseModel):
     sender: Optional[str] = None # e.g. email address or "os_user"
     attachment_base64: Optional[str] = None
     webcam_base64: Optional[str] = None
+    audio_base64: Optional[str] = None
 
 class UserProfile(BaseModel):
     user_id: str = "master"
@@ -288,6 +289,30 @@ async def chat_with_gateway(req: ChatRequest, session_svc: SessionService = Depe
     
     logger.info(f"Core: Mapped {sender_id} -> Session: {session_id} ({user_name})")
     
+    # 1.5 Handle Voice Message Transcription (ASR)
+    transcribed_text = None
+    if req.audio_base64:
+        logger.info("Core: Processing incoming audio data...")
+        from services.asr import ASRFactory
+        
+        speech_file = MediaProcessor.process_incoming_audio(req.audio_base64)
+        if speech_file:
+            try:
+                ear = ASRFactory.get_asr_engine()
+                transcribed_text = ear.transcribe(speech_file)
+                logger.info(f"Core: ASR Transcription result: '{transcribed_text}'")
+                req.message = transcribed_text
+            except Exception as asr_err:
+                logger.error(f"Core: ASR transcription failed: {asr_err}")
+                transcribed_text = "Voice message recognition failed."
+                req.message = transcribed_text
+            finally:
+                if os.path.exists(speech_file):
+                    try:
+                        os.remove(speech_file)
+                    except:
+                        pass
+    
     # 2. Context Preparation
     inputs = MediaProcessor.parse_multimodal_input(
         req.message, 
@@ -296,15 +321,41 @@ async def chat_with_gateway(req: ChatRequest, session_svc: SessionService = Depe
     )
     
     if not inputs:
-        return {"reply": "I couldn't hear you.", "tool_calls": []}
+        # If ASR failed or empty audio/message, use a default fallback
+        inputs = MediaProcessor.parse_multimodal_input(
+            "Hello",
+            req.attachment_base64,
+            req.webcam_base64
+        )
 
     async def event_generator():
         try:
-            # Pass session_id and user_name to brain
+            # 1. Stream the user's voice transcription back to frontend immediately
+            if transcribed_text:
+                yield json.dumps({"user_transcription": transcribed_text}) + "\n"
+            
+            # 2. Stream the LLM response
+            final_reply = ""
             async for response in brain.run(inputs, is_master=is_master, session_id=session_id, user_name=user_name):
                 if response.get("gen_ui"):
                     logger.info(f"Core: GenUI detected: {json.dumps(response.get('gen_ui'))}")
+                if response.get("reply"):
+                    final_reply = response["reply"]
                 yield json.dumps(response) + "\n"
+                
+            # 3. Stream generated audio (TTS) if user sent a voice message
+            if final_reply and req.audio_base64:
+                try:
+                    from services.tts import TTSFactory
+                    logger.info("Core: Generating Edge-TTS voice output...")
+                    is_chinese = any('\u4e00' <= char <= '\u9fff' for char in final_reply)
+                    voice = "zh-CN-XiaoxiaoNeural" if is_chinese else "en-GB-RyanNeural"
+                    mouth = TTSFactory.get_tts_engine("edge", voice=voice)
+                    base64_audio = await mouth.generate_base64_audio(final_reply)
+                    yield json.dumps({"audio": base64_audio}) + "\n"
+                except Exception as tts_err:
+                    logger.error(f"Core: TTS Generation failed: {tts_err}")
+                    
         except Exception as e:
             logger.error(f"Core: Brain failed: {e}")
             yield json.dumps({"reply": f"Internal Error: {e}", "tool_calls": []}) + "\n"

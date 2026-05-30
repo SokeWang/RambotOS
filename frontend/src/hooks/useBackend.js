@@ -379,16 +379,26 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
         }
     }, []);
  
-    const sendMessage = useCallback(async (text, attachment, capturedImage) => {
+    const sendMessage = useCallback(async (text, attachment, capturedImage, audioBase64 = null) => {
         if (backend && !backend.isMock) {
             backend.chat(text, attachment || "", capturedImage || "");
             return;
         }
         
         console.log("useBackend: Using Web API fallback to send message...");
-        addLog('system', 'Sending message via Web API...');
+        addLog('system', audioBase64 ? 'Sending voice message...' : 'Sending message via Web API...');
         
         try {
+            // Append temporary user bubble if it's a voice message
+            if (audioBase64) {
+                setChatHistory(prev => [...prev, {
+                    type: 'user',
+                    content: [{ type: 'text', text: '🎤 Voice Message (Recognizing...)' }],
+                    time: new Date(),
+                    attachment: "Voice Layer"
+                }]);
+            }
+
             // Append temporary AI "thinking" message
             setChatHistory(prev => [...prev, {
                 type: 'ai',
@@ -400,10 +410,11 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    message: text,
+                    message: text || null,
                     sender: "os_user",
                     attachment_base64: attachment || null,
-                    webcam_base64: capturedImage || null
+                    webcam_base64: capturedImage || null,
+                    audio_base64: audioBase64 || null
                 })
             });
             
@@ -414,6 +425,7 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             let accumulatedReply = "";
             let toolCalls = [];
             let genUIContent = null;
+            let base64Audio = null;
             
             while (true) {
                 const { done, value } = await reader.read();
@@ -426,6 +438,21 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                     if (line.trim()) {
                         try {
                             const payload = JSON.parse(line);
+                            if (payload.user_transcription) {
+                                setChatHistory(prev => {
+                                    const list = [...prev];
+                                    for (let i = list.length - 1; i >= 0; i--) {
+                                        if (list[i].type === 'user') {
+                                            list[i] = {
+                                                ...list[i],
+                                                content: [{ type: 'text', text: payload.user_transcription }]
+                                            };
+                                            break;
+                                        }
+                                    }
+                                    return list;
+                                });
+                            }
                             if (payload.reply) {
                                 accumulatedReply = payload.reply;
                             }
@@ -434,6 +461,9 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                             }
                             if (payload.gen_ui) {
                                 genUIContent = payload.gen_ui;
+                            }
+                            if (payload.audio) {
+                                base64Audio = payload.audio;
                             }
                             
                             setChatHistory(prev => {
@@ -469,6 +499,12 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             }, 8000);
             
             addLog('system', 'Response completed.');
+
+            if (base64Audio) {
+                console.log("Playing audio from Web API...");
+                const audio = new Audio(base64Audio);
+                audio.play().catch(e => console.warn("Autoplay blocked:", e.message || e));
+            }
             
         } catch (err) {
             console.error("Web API call failed:", err);
@@ -491,10 +527,10 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
         if (backend && !backend.isMock) {
             backend.process_audio(base64Audio, capturedImage || "");
         } else {
-            console.error("Voice processing fallback is handled via text inputs in pure Web mode.");
-            addLog('system', 'Voice input is available natively via Web Speech APIs.');
+            console.log("useBackend: Handing over audio message to Web API fallback...");
+            sendMessage("", null, capturedImage, base64Audio);
         }
-    }, [backend, addLog]);
+    }, [backend, sendMessage]);
  
     const selectFile = useCallback(() => {
         if (backend && !backend.isMock) {
