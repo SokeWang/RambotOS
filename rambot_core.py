@@ -286,6 +286,13 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Standby for incoming client keep-alives or data
             data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    continue
+            except Exception:
+                pass
             logger.debug(f"WebSocket received data: {data}")
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)

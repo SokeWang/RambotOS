@@ -352,20 +352,30 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             // Establish real-time WebSocket connection for events, wake word, and notifications
             let ws = null;
             let reconnectTimeout = null;
+            let pingInterval = null;
             let isCleanClose = false;
-
+ 
             const connectWebSocket = () => {
-                console.log("WebSocket: Connecting to ws://127.0.0.1:8000/ws ...");
-                ws = new WebSocket("ws://127.0.0.1:8000/ws");
-
+                const wsHost = window.location.hostname || "127.0.0.1";
+                console.log(`WebSocket: Connecting to ws://${wsHost}:8000/ws ...`);
+                ws = new WebSocket(`ws://${wsHost}:8000/ws`);
+ 
                 ws.onopen = () => {
                     console.log("WebSocket: Connection established!");
                     addLog('system', 'Real-time Event Channel Connected');
+                    
+                    // Keep-alive heartbeat: send ping every 20s to prevent proxy idle timeout
+                    pingInterval = setInterval(() => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: "ping" }));
+                        }
+                    }, 20000);
                 };
-
+ 
                 ws.onmessage = (event) => {
                     try {
                         const notif = JSON.parse(event.data);
+                        if (notif.type === "pong") return; // Keepalive handshake
                         console.log("WebSocket: Received event:", notif);
                         if (notif.message === 'WAKE_WORD_TRIGGERED') {
                             console.log("Wake word triggered! Dispatching WakeWordDetected event.");
@@ -378,22 +388,26 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                         console.error("WebSocket: Failed to parse event message:", e);
                     }
                 };
-
+ 
                 ws.onclose = () => {
+                    if (pingInterval) {
+                        clearInterval(pingInterval);
+                        pingInterval = null;
+                    }
                     if (!isCleanClose) {
                         console.log("WebSocket: Connection closed. Reconnecting in 3s...");
                         reconnectTimeout = setTimeout(connectWebSocket, 3000);
                     }
                 };
-
+ 
                 ws.onerror = (err) => {
                     console.error("WebSocket error:", err);
                     ws.close();
                 };
             };
-
+ 
             connectWebSocket();
-
+ 
             return () => {
                 isCleanClose = true;
                 if (ws) {
@@ -401,6 +415,9 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 }
                 if (reconnectTimeout) {
                     clearTimeout(reconnectTimeout);
+                }
+                if (pingInterval) {
+                    clearInterval(pingInterval);
                 }
             };
         }
