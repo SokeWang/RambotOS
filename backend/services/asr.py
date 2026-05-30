@@ -10,6 +10,7 @@ class ASR(ABC):
 class GoogleWebSpeechASR(ASR):
     def __init__(self):
         import speech_recognition as sr
+        self.sr = sr
         self.recognizer = sr.Recognizer()
 
     def transcribe(self, audio_path: str) -> str:
@@ -17,15 +18,15 @@ class GoogleWebSpeechASR(ASR):
         Transcribes audio file at the given path using Google Web Speech API.
         """
         try:
-            with sr.AudioFile(audio_path) as source:
+            with self.sr.AudioFile(audio_path) as source:
                 audio = self.recognizer.record(source)
             text = self.recognizer.recognize_google(audio)
             logger.info(f"Google ASR Output: {text}")
             return text
-        except sr.UnknownValueError:
+        except self.sr.UnknownValueError:
             logger.warning("Google Speech Recognition could not understand audio (likely silent)")
             raise ASRError("No speech detected in audio")
-        except sr.RequestError as e:
+        except self.sr.RequestError as e:
             logger.error(f"Could not request results from Google Speech Recognition service; {e}")
             raise ASRError(f"ASR Service error: {str(e)}")
         except Exception as e:
