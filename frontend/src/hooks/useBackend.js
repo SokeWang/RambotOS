@@ -401,6 +401,7 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
                 };
  
                 ws.onerror = (err) => {
+                    if (isCleanClose) return;
                     console.error("WebSocket error:", err);
                     ws.close();
                 };
