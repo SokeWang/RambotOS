@@ -356,7 +356,7 @@ export const useBackend = (addLog, setChatHistory, setSubtitle, setIsSubtitleFad
             let isCleanClose = false;
  
             const connectWebSocket = () => {
-                const wsHost = window.location.hostname || "127.0.0.1";
+                const wsHost = "127.0.0.1";
                 console.log(`WebSocket: Connecting to ws://${wsHost}:8000/ws ...`);
                 ws = new WebSocket(`ws://${wsHost}:8000/ws`);
  
